@@ -1,0 +1,7 @@
+# Ignorar dependências (Isto resolve o teu erro 500)
+node_modules/
+
+# Ignorar builds e variáveis de ambiente
+dist/
+.env
+.DS_Store
