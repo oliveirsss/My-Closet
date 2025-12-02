@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
-import { LoginScreen } from './components/LoginScreen';
-import { Dashboard } from './components/Dashboard';
-import { Inventory } from './components/Inventory';
-import { ItemDetail } from './components/ItemDetail';
-import { ImageSearch } from './components/ImageSearch';
-import { supabase } from './utils/supabase-client';
-import * as api from './utils/api';
+import { LoginScreen } from './features/auth/LoginScreen';
+import { Dashboard } from './features/dashborad/Dashboard';
+import { Inventory } from './features/inventory/Inventory';
+import { ItemDetail } from './features/inventory/ItemDetail';
+import { ImageSearch } from './features/search/ImageSearch';
+import { supabase } from './lib/supabase';
+import * as api from './services/api';
 
 export type UserType = 'visitor' | 'client' | null;
 

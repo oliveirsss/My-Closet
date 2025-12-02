@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { ClothingItem } from '../App';
-import { Button } from './ui/button';
-import { Badge } from './ui/badge';
-import { Card } from './ui/card';
-import { 
+import { ClothingItem } from '../../types';
+import { Button } from '../../components/ui/button';
+import { Badge } from '../../components/ui/badge';
+import { Card } from '../../components/ui/card';
+import { AddItemDialog } from './AddItemDialog'; // Importar o Dialog
+import {
   ArrowLeft,
   Edit,
   Trash2,
@@ -26,6 +27,7 @@ interface ItemDetailProps {
 
 export function ItemDetail({ item, onBack, onUpdate, onDelete }: ItemDetailProps) {
   const [isWashing, setIsWashing] = useState(item.status === 'dirty');
+  const [isEditing, setIsEditing] = useState(false); // Estado para controlar o Dialog
 
   const toggleWashing = () => {
     const newStatus = isWashing ? 'clean' : 'dirty';
@@ -45,14 +47,13 @@ export function ItemDetail({ item, onBack, onUpdate, onDelete }: ItemDetailProps
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-stone-100">
-      {/* Header */}
       <header className="bg-white border-b border-stone-200 px-6 py-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <Button variant="ghost" onClick={onBack}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             Voltar
           </Button>
-          
+
           <div className="flex gap-2">
             <Button
               variant="outline"
@@ -61,9 +62,12 @@ export function ItemDetail({ item, onBack, onUpdate, onDelete }: ItemDetailProps
             >
               <Heart className={`h-4 w-4 ${item.favorite ? 'fill-red-500' : ''}`} />
             </Button>
-            <Button variant="outline">
+
+            {/* BOTÃO DE EDITAR AGORA ABRE O DIALOG */}
+            <Button variant="outline" onClick={() => setIsEditing(true)}>
               <Edit className="h-4 w-4" />
             </Button>
+
             <Button variant="outline" onClick={handleDelete} className="text-red-600 hover:text-red-700">
               <Trash2 className="h-4 w-4" />
             </Button>
@@ -79,7 +83,7 @@ export function ItemDetail({ item, onBack, onUpdate, onDelete }: ItemDetailProps
               <img
                 src={item.image}
                 alt={item.name}
-                className="w-full h-[600px] object-cover rounded-lg shadow-xl"
+                className="w-full h-[600px] object-contain bg-white rounded-lg shadow-xl border border-stone-100"
               />
               <div className="flex gap-2 mt-4">
                 <Button
@@ -100,7 +104,6 @@ export function ItemDetail({ item, onBack, onUpdate, onDelete }: ItemDetailProps
               <p className="text-xl text-stone-600">{item.brand} • Tamanho {item.size}</p>
             </div>
 
-            {/* Status Badge */}
             <div className="flex gap-2">
               <Badge className={`${item.status === 'clean' ? 'bg-emerald-600' : 'bg-amber-600'}`}>
                 {item.status === 'clean' ? 'Limpo' : 'Para Lavar'}
@@ -112,7 +115,6 @@ export function ItemDetail({ item, onBack, onUpdate, onDelete }: ItemDetailProps
               )}
             </div>
 
-            {/* Type & Layer */}
             <Card className="p-6">
               <div className="grid grid-cols-2 gap-6">
                 <div>
@@ -137,7 +139,6 @@ export function ItemDetail({ item, onBack, onUpdate, onDelete }: ItemDetailProps
               </div>
             </Card>
 
-            {/* Materials */}
             <Card className="p-6">
               <h3 className="mb-3 text-emerald-900">Materiais</h3>
               <div className="flex gap-2 flex-wrap">
@@ -149,7 +150,6 @@ export function ItemDetail({ item, onBack, onUpdate, onDelete }: ItemDetailProps
               </div>
             </Card>
 
-            {/* Technical Specs */}
             <Card className="p-6">
               <h3 className="mb-4 text-emerald-900">Especificações Técnicas</h3>
               <div className="space-y-4">
@@ -171,7 +171,6 @@ export function ItemDetail({ item, onBack, onUpdate, onDelete }: ItemDetailProps
               </div>
             </Card>
 
-            {/* Resistance */}
             <Card className="p-6">
               <h3 className="mb-4 text-emerald-900">Resistência</h3>
               <div className="grid grid-cols-2 gap-4">
@@ -201,7 +200,6 @@ export function ItemDetail({ item, onBack, onUpdate, onDelete }: ItemDetailProps
               </div>
             </Card>
 
-            {/* Seasons */}
             <Card className="p-6">
               <div className="flex items-center gap-2 mb-4 text-emerald-900">
                 <Calendar className="h-5 w-5" />
@@ -215,23 +213,19 @@ export function ItemDetail({ item, onBack, onUpdate, onDelete }: ItemDetailProps
                 ))}
               </div>
             </Card>
-
-            {/* Temperature Guide */}
-            <Card className="p-6 bg-gradient-to-br from-emerald-50 to-stone-50 border-emerald-200">
-              <h3 className="mb-3 text-emerald-900">Guia de Utilização</h3>
-              <div className="space-y-2 text-sm text-stone-700">
-                <p>
-                  <strong>Melhor uso:</strong> Quando a temperatura estiver entre {item.tempMin}°C e {item.tempMax}°C
-                </p>
-                {item.waterproof && <p>• Ideal para dias chuvosos</p>}
-                {item.windproof && <p>• Recomendado para dias ventosos</p>}
-                {item.layer === 1 && <p>• Use como camada base diretamente na pele</p>}
-                {item.layer === 2 && <p>• Use sobre a camada base para isolamento térmico</p>}
-                {item.layer === 3 && <p>• Use como camada exterior para proteção contra elementos</p>}
-              </div>
-            </Card>
           </div>
         </div>
+
+        {/* DIALOG DE EDIÇÃO (ESCONDIDO ATÉ CLICARES NO LÁPIS) */}
+        <AddItemDialog
+          open={isEditing}
+          onOpenChange={setIsEditing}
+          itemToEdit={item}
+          onUpdate={(updatedItem) => {
+            onUpdate(updatedItem);
+            setIsEditing(false);
+          }}
+        />
       </main>
     </div>
   );

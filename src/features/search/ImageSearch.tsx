@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { ClothingItem } from '../App';
-import { Button } from './ui/button';
-import { Card } from './ui/card';
-import { Badge } from './ui/badge';
+// Tipos sobem 2 níveis
+import { ClothingItem } from '../../types';
+// UI sobe 2 níveis e entra em components/ui
+import { Button } from '../../components/ui/button';
+import { Card } from '../../components/ui/card';
+import { Badge } from '../../components/ui/badge';
 import { 
   ArrowLeft,
   Camera,

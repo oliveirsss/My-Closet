@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { UserType } from '../App';
-import { Button } from './ui/button';
-import { Input } from './ui/input';
-import { Label } from './ui/label';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { UserType } from '../../types'; // <-- Mudou de '../../App'
+import { Button } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
+import { Label } from '../../components/ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs';
 import { Search, User } from 'lucide-react';
-import { supabase } from '../utils/supabase-client';
-import * as api from '../utils/api';
+import { supabase } from '../../lib/supabase'; // <-- Mudou de '../../lib/supabase-client'
+import * as api from '../../services/api'; // <-- Confirma que está em '../../services/api'
 
 interface LoginScreenProps {
   onLogin: (type: UserType, email?: string, password?: string) => void;

@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { ClothingItem, Screen, UserType } from '../App';
-import { Button } from './ui/button';
-import { Input } from './ui/input';
-import { Badge } from './ui/badge';
-import { 
-  Plus, 
-  Search, 
+// Agora UserType e ClothingItem vêm de 'types' (sobe 3 níveis: features/inventory -> features -> src -> types)
+import { ClothingItem, Screen, UserType } from '../../types';
+// Componentes UI (sobe 3 níveis: features/inventory -> features -> src -> components/ui)
+import { Button } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
+import { Badge } from '../../components/ui/badge';
+import {
+  Plus,
+  Search,
   Filter,
   Heart,
   Droplet,
@@ -14,6 +16,7 @@ import {
   Home,
   Camera
 } from 'lucide-react';
+// AddItemDialog está na mesma pasta (Inventory), por isso é só './'
 import { AddItemDialog } from './AddItemDialog';
 import Masonry from 'react-responsive-masonry';
 
