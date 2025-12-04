@@ -6,6 +6,9 @@ import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 // Componente de Edição de Perfil
 import { EditProfileDialog } from '../auth/EditProfileDialog';
+// Componente de Viagem
+import { TravelPlannerDialog } from './TravelPlannerDialog';
+
 // Ícones
 import {
   Cloud,
@@ -18,11 +21,11 @@ import {
   LogOut,
   TrendingUp,
   MapPin,
-  Edit2
+  Edit2,
+  Plane
 } from 'lucide-react';
 // API
 import { supabase } from '../../lib/supabase';
-import * as api from '../../services/api';
 
 // --- CONFIGURAÇÃO DA API ---
 const API_KEY = import.meta.env.VITE_OPENWEATHER_API_KEY || '';
@@ -36,14 +39,16 @@ interface DashboardProps {
 }
 
 export function Dashboard({ items, onNavigate, onLogout, onViewItem }: DashboardProps) {
-  // ESTADO DO PERFIL (Agora com todos os campos)
+  // 1. ESTADOS (Profile, Travel, Weather)
   const [userProfile, setUserProfile] = useState({
     name: 'Utilizador',
     avatar_url: '',
     bio: '',
     location: ''
   });
+
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isTravelOpen, setIsTravelOpen] = useState(false);
 
   const [weather, setWeather] = useState({
     temp: 0,
@@ -54,37 +59,12 @@ export function Dashboard({ items, onNavigate, onLogout, onViewItem }: Dashboard
     loading: true
   });
 
-  // 1. Carregar Perfil Completo do backend
+  // 2. Carregar Perfil (Direto do Supabase para ser mais robusto)
   useEffect(() => {
-    let isMounted = true;
-
-    const ensureAccessToken = async () => {
-      if (api.getAccessToken()) return true;
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.access_token) {
-        api.setAccessToken(session.access_token);
-        return true;
-      }
-      return false;
-    };
-
-    const getUserProfile = async () => {
-      const hasToken = await ensureAccessToken();
-      if (!hasToken || !isMounted) return;
-
+    const loadProfile = async () => {
       try {
-        const { profile } = await api.getProfile();
-        if (!isMounted) return;
-        setUserProfile({
-          name: profile.name || 'Utilizador',
-          avatar_url: profile.avatar_url || '',
-          bio: profile.bio || '',
-          location: profile.location || ''
-        });
-      } catch (error) {
-        console.error('Erro ao carregar perfil API, fallback para Supabase:', error);
         const { data: { user } } = await supabase.auth.getUser();
-        if (isMounted && user?.user_metadata) {
+        if (user?.user_metadata) {
           setUserProfile({
             name: user.user_metadata.name || 'Utilizador',
             avatar_url: user.user_metadata.avatar_url || '',
@@ -92,17 +72,14 @@ export function Dashboard({ items, onNavigate, onLogout, onViewItem }: Dashboard
             location: user.user_metadata.location || ''
           });
         }
+      } catch (error) {
+        console.error("Erro ao carregar perfil:", error);
       }
     };
-
-    getUserProfile();
-
-    return () => {
-      isMounted = false;
-    };
+    loadProfile();
   }, []);
 
-  // 2. Carregar Tempo
+  // 3. Carregar Tempo
   useEffect(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -112,7 +89,7 @@ export function Dashboard({ items, onNavigate, onLogout, onViewItem }: Dashboard
         },
         (error) => {
           console.error("Erro de localização:", error);
-          fetchWeather(38.7169, -9.1399);
+          fetchWeather(38.7169, -9.1399); // Fallback Lisboa
         }
       );
     } else {
@@ -154,7 +131,7 @@ export function Dashboard({ items, onNavigate, onLogout, onViewItem }: Dashboard
     }
   };
 
-  // Lógica de Sugestão
+  // 4. Lógica de Sugestão
   const getSuggestedOutfit = () => {
     const temp = weather.temp;
     const layer1Items = items.filter(item => item.layer === 1 && item.status === 'clean');
@@ -183,7 +160,7 @@ export function Dashboard({ items, onNavigate, onLogout, onViewItem }: Dashboard
       <header className="bg-white border-b border-stone-200 px-6 py-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
-            {/* AVATAR DINÂMICO (Foto ou Letra) */}
+            {/* AVATAR DINÂMICO */}
             <div className="w-12 h-12 rounded-full bg-emerald-700 flex items-center justify-center text-white text-xl font-bold overflow-hidden border-2 border-emerald-100 shadow-sm">
               {userProfile.avatar_url ? (
                 <img src={userProfile.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
@@ -206,7 +183,6 @@ export function Dashboard({ items, onNavigate, onLogout, onViewItem }: Dashboard
                 <Edit2 className="h-3 w-3 text-stone-400 opacity-0 group-hover:opacity-100 transition-all" />
               </div>
 
-              {/* Mostra localização se o user tiver preenchido */}
               {userProfile.location && (
                 <div className="flex items-center gap-1 mt-0.5 text-xs text-stone-400">
                   <MapPin className="h-3 w-3" />
@@ -223,6 +199,12 @@ export function Dashboard({ items, onNavigate, onLogout, onViewItem }: Dashboard
             <Button variant="outline" onClick={() => onNavigate('search')}>
               <Search className="mr-2 h-4 w-4" /> Pesquisar
             </Button>
+
+            {/* BOTÃO VIAGEM */}
+            <Button variant="outline" onClick={() => setIsTravelOpen(true)}>
+              <Plane className="mr-2 h-4 w-4" /> Viagem
+            </Button>
+
             <Button variant="ghost" onClick={onLogout}>
               <LogOut className="h-4 w-4" />
             </Button>
@@ -299,12 +281,18 @@ export function Dashboard({ items, onNavigate, onLogout, onViewItem }: Dashboard
         </section>
       </main>
 
-      {/* Dialog Edição */}
+      {/* --- DIALOGS --- */}
       <EditProfileDialog
         open={isProfileOpen}
         onOpenChange={setIsProfileOpen}
         userData={userProfile}
         onUpdate={(newData: any) => setUserProfile({ ...userProfile, ...newData })}
+      />
+
+      <TravelPlannerDialog
+        open={isTravelOpen}
+        onOpenChange={setIsTravelOpen}
+        items={items}
       />
     </div>
   );
@@ -329,7 +317,6 @@ function SuggestionCard({ layer, item, onViewItem, title, color }: any) {
 
       {item ? (
         <>
-          {/* FIX: Altura fixa (h-48) e object-contain para não esticar imagens */}
           <div className="h-48 w-full overflow-hidden rounded-lg mb-4 bg-stone-50 border border-stone-100 flex items-center justify-center">
             <img src={item.image} alt={item.name} className="w-full h-full object-contain p-2" />
           </div>
@@ -350,7 +337,6 @@ function SuggestionCard({ layer, item, onViewItem, title, color }: any) {
 
 function StatCard({ label, value, icon, indicator, subtext }: any) {
   return (
-    // REVERTIDO AO ORIGINAL COMPACTO (Sem h-full, sem gaps gigantes)
     <Card className="p-5 bg-white border-stone-100 shadow-sm">
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-medium text-stone-500 uppercase tracking-wider">{label}</span>

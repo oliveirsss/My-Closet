@@ -93,3 +93,8 @@ export async function updateProfile(payload: ProfilePayload): Promise<{ profile:
     body: JSON.stringify(payload),
   });
 }
+
+export async function getPublicItems(): Promise<{ items: ClothingItem[] }> {
+  // Nota: Esta rota não precisa de token, o fetchAPI gere isso
+  return fetchAPI('/public-items');
+}

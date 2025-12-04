@@ -10,7 +10,6 @@ router = APIRouter()
 # --- Helper para criar o "Super Cliente" (Admin) ---
 def get_admin_client():
     url = os.environ.get("SUPABASE_URL")
-    # Usa a mesma chave poderosa que usaste para as imagens
     key = os.environ.get("SUPABASE_SERVICE_KEY")
 
     if not key:
@@ -20,20 +19,75 @@ def get_admin_client():
     return create_client(url, key)
 
 
-# 1. GET ITEMS
+# --- NOVO: Endpoint para Itens Públicos (Visitantes) ---
+@router.get("/public-items")
+def get_public_items():
+    admin_supabase = get_admin_client()
+
+    try:
+        # Buscar itens públicos
+        response = admin_supabase.table("clothes").select("*").eq("is_public", True).execute()
+        items_data = response.data
+
+        # Buscar info dos donos (para mostrar quem publicou)
+        # Nota: Isto não é super eficiente para milhares de items, mas serve para o projeto.
+        enriched_items = []
+        for item in items_data:
+            owner_id = item["user_id"]
+            owner_name = "Utilizador Anónimo"
+            owner_avatar = ""
+
+            try:
+                # Tentar buscar dados do user
+                user_res = admin_supabase.auth.admin.get_user_by_id(owner_id)
+                if user_res and user_res.user:
+                    meta = user_res.user.user_metadata
+                    owner_name = meta.get("name", "Utilizador")
+                    owner_avatar = meta.get("avatar_url", "")
+            except:
+                pass  # Se falhar, mostra anónimo
+
+            enriched_items.append({
+                "id": item["id"],
+                "name": item["name"],
+                "brand": item.get("brand", ""),
+                "size": item.get("size", ""),
+                "type": item["type"],
+                "layer": item["layer"],
+                "materials": item["materials"] or [],
+                "weight": item["weight"],
+                "tempMin": item["temp_min"],
+                "tempMax": item["temp_max"],
+                "waterproof": item["waterproof"],
+                "windproof": item["windproof"],
+                "seasons": item["seasons"] or [],
+                "image": item["image"],
+                "status": item["status"],
+                "favorite": item["favorite"],
+                "isPublic": item.get("is_public", False),
+                "ownerName": owner_name,
+                "ownerAvatar": owner_avatar,
+                "ownerId": item["user_id"]
+            })
+
+        return {"items": enriched_items}
+    except Exception as e:
+        print(f"Erro public items: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 1. GET ITEMS (Privado)
 @router.get("/items")
 def get_items(authorization: str = Header(None)):
-    # Validar quem é o utilizador
     user = get_user_from_token(authorization)
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     admin_supabase = get_admin_client()
 
-    # IMPORTANTE: Como somos Admin, temos de filtrar manualmente pelo ID do user
+    # Filtramos pelo ID do utilizador logado
     response = admin_supabase.table("clothes").select("*").eq("user_id", user.user.id).execute()
 
-    # Converter snake_case (DB) para camelCase (Frontend)
     items = []
     for item in response.data:
         items.append({
@@ -52,7 +106,8 @@ def get_items(authorization: str = Header(None)):
             "seasons": item["seasons"],
             "image": item["image"],
             "status": item["status"],
-            "favorite": item["favorite"]
+            "favorite": item["favorite"],
+            "isPublic": item.get("is_public", False)  # Incluir isPublic na resposta
         })
 
     return {"items": items}
@@ -83,13 +138,14 @@ def create_item(item: ClothingItem, authorization: str = Header(None)):
         "seasons": item.seasons,
         "image": item.image,
         "status": item.status,
-        "favorite": item.favorite
+        "favorite": item.favorite,
+        "is_public": item.is_public  # Novo campo
     }
 
     try:
-        # Inserir como Admin (Ignora RLS)
         response = admin_supabase.table("clothes").insert(data_to_insert).execute()
         new_item_db = response.data[0]
+        # Adicionar o ID gerado ao objeto de retorno
         item.id = new_item_db["id"]
         return {"item": item}
     except Exception as e:
@@ -110,6 +166,8 @@ def update_item(item_id: str, item: ClothingItem, authorization: str = Header(No
         "name": item.name,
         "status": item.status,
         "favorite": item.favorite,
+        "is_public": item.is_public,  # Novo campo (permite alterar visibilidade)
+        # Podes adicionar aqui os outros campos se quiseres permitir editar tudo
     }
 
     try:

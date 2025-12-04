@@ -15,6 +15,10 @@ export interface ClothingItem {
   image: string;
   status: 'clean' | 'dirty';
   favorite: boolean;
+  isPublic?: boolean;
+  ownerName?: string;
+  ownerAvatar?: string;
+  ownerId?: string;
 }
 
 export type UserType = 'visitor' | 'client' | null;

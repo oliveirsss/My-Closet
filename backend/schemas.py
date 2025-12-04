@@ -1,7 +1,8 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 
-# Modelo para Roupa
+
+# --- PRODUTOS (Roupa) ---
 class ClothingItem(BaseModel):
     name: str
     brand: str
@@ -10,38 +11,49 @@ class ClothingItem(BaseModel):
     layer: int
     materials: List[str]
     weight: float
-    tempMin: int
-    tempMax: int
+    # Alias para converter camelCase (React) -> snake_case (Python)
+    tempMin: int = Field(alias="tempMin")
+    tempMax: int = Field(alias="tempMax")
+
     waterproof: bool
     windproof: bool
     seasons: List[str]
     image: str
     status: str
     favorite: bool
+    is_public: bool = Field(default=False, alias="isPublic")
+
     id: Optional[str] = None
 
-# Modelo para Upload de Imagem
+    class Config:
+        populate_by_name = True
+
+
+# --- IMAGENS ---
 class ImageUpload(BaseModel):
     image: str
     fileName: str
 
-# Modelo para Signup
+
+# --- UTILIZADORES (Auth & Perfil) ---
 class UserSignup(BaseModel):
     email: str
     password: str
     name: str
 
 
-class UserProfileBase(BaseModel):
+class UserProfileUpdate(BaseModel):
     name: str
     avatar_url: Optional[str] = None
     bio: Optional[str] = None
     location: Optional[str] = None
 
 
-class UserProfile(UserProfileBase):
-    user_id: str
-
-
-class UserProfileUpdate(UserProfileBase):
-    pass
+# (Opcional) Caso precises de retornar o perfil completo
+class UserProfile(BaseModel):
+    id: str
+    email: str
+    name: str
+    avatar_url: Optional[str] = None
+    bio: Optional[str] = None
+    location: Optional[str] = None
