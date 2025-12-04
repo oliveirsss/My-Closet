@@ -1,7 +1,8 @@
-import { ClothingItem, UserProfile } from '../types';
+import { ClothingItem, UserProfile } from "../types";
 
-// Aponta para o teu servidor Python local
-const API_BASE = 'http://127.0.0.1:8000';
+// Base URL do backend (vem do .env, com fallback para localhost)
+const API_BASE =
+    import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 // Chave pública para quando o user não está logado (fallback)
 const publicAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -17,11 +18,19 @@ export function getAccessToken() {
 }
 
 async function fetchAPI(endpoint: string, options: RequestInit = {}) {
-  const headers = {
-    'Content-Type': 'application/json',
-    // Usa o token do user se existir, senão usa a chave pública
-    'Authorization': `Bearer ${accessToken || publicAnonKey}`,
-    ...options.headers,
+  // Construir header Authorization de forma segura
+  let authHeader: string | undefined = undefined;
+
+  if (accessToken) {
+    authHeader = `Bearer ${accessToken}`;
+  } else if (publicAnonKey) {
+    authHeader = `Bearer ${publicAnonKey}`;
+  }
+
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+    ...(authHeader ? { Authorization: authHeader } : {}),
+    ...(options.headers || {}),
   };
 
   const response = await fetch(`${API_BASE}${endpoint}`, {
@@ -29,52 +38,80 @@ async function fetchAPI(endpoint: string, options: RequestInit = {}) {
     headers,
   });
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(error.error || `HTTP ${response.status}`);
+  // Tentar ler JSON, mas sem rebentar se o backend mandar texto simples
+  let data: any = null;
+  try {
+    data = await response.json();
+  } catch {
+    // se não for JSON, deixamos data = null
   }
 
-  return response.json();
+  if (!response.ok) {
+    const message =
+        (data && (data.error || data.detail || data.message)) ||
+        `HTTP ${response.status}`;
+    throw new Error(message);
+  }
+
+  return data;
 }
 
-// ... (Mantém as restantes funções: signup, getItems, addItem, etc. iguais) ...
+/* AUTH / SIGNUP */
+
 export async function signup(email: string, password: string, name: string) {
-  return fetchAPI('/signup', {
-    method: 'POST',
+  return fetchAPI("/signup", {
+    method: "POST",
     body: JSON.stringify({ email, password, name }),
   });
 }
 
+/* ITEMS (PRIVADO) */
+
 export async function getItems(): Promise<{ items: ClothingItem[] }> {
-  return fetchAPI('/items');
+  return fetchAPI("/items");
 }
 
-export async function addItem(item: Omit<ClothingItem, 'id'>): Promise<{ item: ClothingItem }> {
-  return fetchAPI('/items', {
-    method: 'POST',
+export async function addItem(
+    item: Omit<ClothingItem, "id">
+): Promise<{ item: ClothingItem }> {
+  return fetchAPI("/items", {
+    method: "POST",
     body: JSON.stringify(item),
   });
 }
 
-export async function updateItem(id: string, updates: Partial<ClothingItem>): Promise<{ item: ClothingItem }> {
+export async function updateItem(
+    id: string,
+    updates: Partial<ClothingItem>
+): Promise<{ item: ClothingItem }> {
   return fetchAPI(`/items/${id}`, {
-    method: 'PUT',
+    method: "PUT",
     body: JSON.stringify(updates),
   });
 }
 
-export async function deleteItem(id: string): Promise<{ success: boolean }> {
+export async function deleteItem(
+    id: string
+): Promise<{ success: boolean }> {
   return fetchAPI(`/items/${id}`, {
-    method: 'DELETE',
+    method: "DELETE",
   });
 }
 
-export async function uploadImage(image: string, fileName: string): Promise<{ url: string; path: string }> {
-  return fetchAPI('/upload-image', {
-    method: 'POST',
+/* UPLOAD IMAGEM */
+
+export async function uploadImage(
+    image: string,
+    fileName: string
+): Promise<{ url: string; path: string }> {
+  // Ajusta o endpoint se no backend estiver com prefixo (ex.: /storage/upload-image)
+  return fetchAPI("/upload-image", {
+    method: "POST",
     body: JSON.stringify({ image, fileName }),
   });
 }
+
+/* PERFIL */
 
 type ProfilePayload = {
   name: string;
@@ -84,17 +121,20 @@ type ProfilePayload = {
 };
 
 export async function getProfile(): Promise<{ profile: UserProfile }> {
-  return fetchAPI('/profile');
+  return fetchAPI("/profile");
 }
 
-export async function updateProfile(payload: ProfilePayload): Promise<{ profile: UserProfile }> {
-  return fetchAPI('/profile', {
-    method: 'PUT',
+export async function updateProfile(
+    payload: ProfilePayload
+): Promise<{ profile: UserProfile }> {
+  return fetchAPI("/profile", {
+    method: "PUT",
     body: JSON.stringify(payload),
   });
 }
 
+/* ITENS PÚBLICOS (VISITANTE) */
+
 export async function getPublicItems(): Promise<{ items: ClothingItem[] }> {
-  // Nota: Esta rota não precisa de token, o fetchAPI gere isso
-  return fetchAPI('/public-items');
+  return fetchAPI("/public-items");
 }

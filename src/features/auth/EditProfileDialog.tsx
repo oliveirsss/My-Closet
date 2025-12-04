@@ -1,206 +1,231 @@
-import { useState, useEffect } from 'react';
-import { Dialog, DialogContent } from '../../components/ui/dialog';
-import { Button } from '../../components/ui/button';
-import { Input } from '../../components/ui/input';
-import { Label } from '../../components/ui/label';
-import { Textarea } from '../../components/ui/textarea';
-import { User, Upload, MapPin, FileText, Sparkles } from 'lucide-react';
-import * as api from '../../services/api';
+import { useEffect, useRef, useState } from "react";
+import { Camera } from "lucide-react";
 
-interface EditProfileDialogProps {
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/components/ui/button";
+
+import { UserProfile } from "../../types";
+import * as api from "../../services/api";
+
+interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   userData: {
     name: string;
-    avatar_url?: string;
-    bio?: string;
-    location?: string;
+    avatar_url: string;
+    bio: string;
+    location: string;
   };
-  onUpdate: (data: any) => void;
+  onUpdate: (data: Partial<UserProfile>) => void;
 }
 
-export function EditProfileDialog({ open, onOpenChange, userData, onUpdate }: EditProfileDialogProps) {
-  const [name, setName] = useState('');
-  const [bio, setBio] = useState('');
-  const [location, setLocation] = useState('');
-  const [imagePreview, setImagePreview] = useState<string>('');
-  const [uploadedImageUrl, setUploadedImageUrl] = useState<string>('');
-  const [loading, setLoading] = useState(false);
-  const [uploadingImage, setUploadingImage] = useState(false);
+export function EditProfileDialog({ open, onOpenChange, userData, onUpdate }: Props) {
+  const [form, setForm] = useState({
+    name: "",
+    location: "",
+    bio: "",
+    avatar_url: "",
+  });
 
+  const [isSaving, setIsSaving] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // sincronizar com dados atuais sempre que se abre o modal
   useEffect(() => {
-    if (open) {
-      setName(userData.name || '');
-      setBio(userData.bio || '');
-      setLocation(userData.location || '');
-      setImagePreview(userData.avatar_url || '');
-      setUploadedImageUrl(userData.avatar_url || '');
+    if (userData && open) {
+      setForm({
+        name: userData.name || "",
+        location: userData.location || "",
+        bio: userData.bio || "",
+        avatar_url: userData.avatar_url || "",
+      });
     }
-  }, [open, userData]);
+  }, [userData, open]);
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleChange = (field: keyof typeof form, value: string) => {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleAvatarClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleAvatarChange = async (
+      event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0];
     if (!file) return;
+
+    setIsUploading(true);
 
     const reader = new FileReader();
     reader.onloadend = async () => {
       const base64 = reader.result as string;
-      setImagePreview(base64);
 
-      if (!api.getAccessToken()) {
-        return;
-      }
-
-      setUploadingImage(true);
       try {
-        const { url } = await api.uploadImage(base64, `avatar_${Date.now()}_${file.name}`);
-        setUploadedImageUrl(url);
+        // upload para o backend (rota /upload-image)
+        const { url } = await api.uploadImage(base64, file.name);
+        setForm((prev) => ({ ...prev, avatar_url: url }));
       } catch (error) {
-        console.error('Erro upload avatar:', error);
-        alert('Erro ao carregar imagem.');
+        console.error("Erro ao enviar imagem:", error);
+        alert("Erro ao enviar imagem de perfil.");
       } finally {
-        setUploadingImage(false);
+        setIsUploading(false);
       }
     };
 
     reader.readAsDataURL(file);
   };
 
-  const sanitize = (value: string) => value.trim() || undefined;
-
   const handleSubmit = async () => {
-    if (!name.trim()) {
-      alert('O nome é obrigatório.');
-      return;
-    }
-
-    setLoading(true);
+    setIsSaving(true);
     try {
       const payload = {
-        name: name.trim(),
-        avatar_url: uploadedImageUrl || userData.avatar_url || undefined,
-        bio: sanitize(bio),
-        location: sanitize(location),
+        name: form.name.trim(),
+        location: form.location.trim() || null,
+        bio: form.bio.trim() || null,
+        avatar_url: form.avatar_url || null,
       };
 
-      const { profile } = await api.updateProfile(payload);
-      onUpdate({
-        name: profile.name,
-        avatar_url: profile.avatar_url,
-        bio: profile.bio,
-        location: profile.location,
-      });
+      // grava no backend
+      await api.updateProfile(payload);
+      // atualiza imediatamente o Dashboard
+      onUpdate(payload);
+
       onOpenChange(false);
-    } catch (error) {
-      console.error('Erro:', error);
-      alert('Erro ao atualizar perfil.');
+    } catch (error: any) {
+      console.error("Erro ao atualizar perfil:", error);
+      alert(error?.message || "Erro ao guardar alterações do perfil.");
     } finally {
-      setLoading(false);
+      setIsSaving(false);
     }
   };
 
+  const avatarSrc =
+      form.avatar_url && form.avatar_url.length > 0
+          ? form.avatar_url
+          : "/default-avatar.png"; // mete aqui um placeholder que tenhas na app
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-4xl p-0 overflow-hidden border-none shadow-2xl">
-        <div className="bg-gradient-to-r from-emerald-700 via-emerald-600 to-emerald-500 px-8 py-6 text-white">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-sm uppercase tracking-[0.4em] text-white/70 mb-1">Perfil</p>
-              <h2 className="text-3xl font-semibold flex items-center gap-3">
-                <Sparkles className="h-6 w-6 text-amber-300" />
-                Personaliza a tua identidade
-              </h2>
-              <p className="text-white/80 mt-2 max-w-2xl">
-                Torna o teu closet mais pessoal. Actualiza o nome, adiciona uma biografia curta e partilha a tua localização.
-              </p>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent
+            className="
+          max-w-md
+          w-full
+          bg-white
+          rounded-2xl
+          shadow-2xl
+          p-6
+          animate-in
+          fade-in
+          zoom-in-95
+          duration-300
+        "
+        >
+          <DialogHeader className="text-center space-y-2">
+            <DialogTitle className="text-xl font-semibold text-stone-800">
+              Editar Perfil
+            </DialogTitle>
+
+            <p className="text-sm text-stone-500">
+              Atualiza o teu nome, fotografia e detalhes pessoais.
+            </p>
+          </DialogHeader>
+
+          {/* Avatar + botão da câmara */}
+          <div className="flex flex-col items-center mt-4 mb-6">
+            <div className="relative">
+              <img
+                  src={avatarSrc}
+                  className="w-28 h-28 rounded-full object-cover shadow-md border border-stone-200 bg-stone-100"
+              />
+              <button
+                  type="button"
+                  onClick={handleAvatarClick}
+                  disabled={isUploading}
+                  className="
+                absolute bottom-0 right-0
+                p-2 rounded-full bg-emerald-600
+                text-white shadow-lg hover:bg-emerald-700
+                disabled:opacity-60
+              "
+              >
+                <Camera size={16} />
+              </button>
             </div>
-            <Button variant="secondary" onClick={handleSubmit} disabled={loading || uploadingImage} className="bg-white text-emerald-800 hover:bg-emerald-50 border-0">
-              {loading ? 'A guardar...' : 'Guardar Alterações'}
+
+            <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="hidden"
+                onChange={handleAvatarChange}
+            />
+
+            {isUploading && (
+                <p className="mt-2 text-xs text-stone-500">
+                  A enviar fotografia...
+                </p>
+            )}
+          </div>
+
+          {/* Form fields */}
+          <div className="space-y-4 mt-2">
+            <div>
+              <label className="text-sm font-medium text-stone-700">
+                Nome de utilizador
+              </label>
+              <Input
+                  value={form.name}
+                  onChange={(e) => handleChange("name", e.target.value)}
+                  className="mt-1"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-stone-700">
+                Localização
+              </label>
+              <Input
+                  value={form.location}
+                  onChange={(e) => handleChange("location", e.target.value)}
+                  className="mt-1"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-stone-700">
+                Sobre mim
+              </label>
+              <Textarea
+                  value={form.bio}
+                  onChange={(e) => handleChange("bio", e.target.value)}
+                  className="mt-1 h-24"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="mt-6 flex justify-between">
+            <Button
+                variant="ghost"
+                onClick={() => onOpenChange(false)}
+                disabled={isSaving}
+            >
+              Cancelar
             </Button>
-          </div>
-        </div>
 
-        <div className="bg-white px-8 py-10">
-          <div className="grid gap-8 md:grid-cols-[260px,1fr]">
-            <section className="bg-stone-50 rounded-2xl p-6 border border-stone-100 flex flex-col items-center text-center">
-              <div className="relative">
-                <div className="w-32 h-32 rounded-full overflow-hidden ring-4 ring-white shadow-xl bg-white">
-                  {imagePreview ? (
-                    <img src={imagePreview} alt="Avatar" className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-stone-100 to-stone-200 text-stone-400">
-                      <User className="h-14 w-14" />
-                    </div>
-                  )}
-                </div>
-
-                <label className="absolute -bottom-2 right-2 bg-emerald-600 hover:bg-emerald-700 text-white p-3 rounded-full cursor-pointer shadow-lg transition-all hover:scale-110 active:scale-95 border-2 border-white">
-                  {uploadingImage ? (
-                    <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <Upload className="h-4 w-4" />
-                  )}
-                  <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} disabled={uploadingImage} />
-                </label>
-              </div>
-              <p className="text-sm text-stone-500 mt-6">Formatos aceites: JPG, PNG. Dimensões recomendadas 512x512.</p>
-            </section>
-
-            <section className="space-y-6">
-              <div className="grid gap-2">
-                <Label htmlFor="name" className="text-sm font-semibold uppercase tracking-wide text-stone-500">Nome de Utilizador</Label>
-                <div className="relative">
-                  <User className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-600" />
-                  <Input
-                    id="name"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="pl-12 h-12 text-lg border-stone-200 focus-visible:ring-emerald-500 rounded-xl"
-                    placeholder="O teu nome"
-                  />
-                </div>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="location" className="text-sm font-semibold uppercase tracking-wide text-stone-500">Localização</Label>
-                <div className="relative">
-                  <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-600" />
-                  <Input
-                    id="location"
-                    value={location}
-                    onChange={(e) => setLocation(e.target.value)}
-                    className="pl-12 h-12 border-stone-200 focus-visible:ring-emerald-500 rounded-xl"
-                    placeholder="Ex: Viana do Castelo"
-                  />
-                </div>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="bio" className="text-sm font-semibold uppercase tracking-wide text-stone-500">Sobre mim</Label>
-                <div className="relative">
-                  <FileText className="absolute left-4 top-4 h-4 w-4 text-emerald-600" />
-                  <Textarea
-                    id="bio"
-                    value={bio}
-                    onChange={(e) => setBio(e.target.value)}
-                    className="pl-12 min-h-[130px] resize-none border-stone-200 focus-visible:ring-emerald-500 rounded-xl"
-                    placeholder="Conta-nos um pouco sobre o teu estilo, peças favoritas ou como queres usar o teu closet."
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-4 pt-4">
-                <Button variant="ghost" onClick={() => onOpenChange(false)} className="text-stone-500 hover:text-stone-700">
-                  Cancelar
-                </Button>
-                <Button onClick={handleSubmit} disabled={loading || uploadingImage} className="bg-emerald-700 hover:bg-emerald-800 text-white px-6">
-                  {loading ? 'A guardar...' : 'Guardar Alterações'}
-                </Button>
-              </div>
-            </section>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
+            <Button
+                onClick={handleSubmit}
+                disabled={isSaving || isUploading}
+                className="bg-emerald-600 hover:bg-emerald-700"
+            >
+              {isSaving ? "A guardar..." : "Guardar alterações"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
   );
 }
