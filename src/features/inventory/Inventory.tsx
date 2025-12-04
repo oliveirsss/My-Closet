@@ -7,7 +7,7 @@ import { Card } from '../../components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/ui/dialog';
 import {
   Search, Droplet, LogOut, Home, Camera,
-  TrendingUp, Zap, User, X, ChevronDown, BarChart3, Shirt, Thermometer
+  TrendingUp, Zap, User, X, ChevronDown, BarChart3, Shirt, Thermometer, Plus
 } from 'lucide-react';
 import { AddItemDialog } from './AddItemDialog';
 import {
@@ -67,7 +67,7 @@ export function Inventory({
       <header className="bg-white border-b border-stone-200 px-6 py-4 sticky top-0 z-30 shadow-sm">
          <div className="max-w-7xl mx-auto flex items-center justify-between">
           <h1 className="text-2xl text-emerald-900 font-semibold flex items-center gap-2">
-            {userType === 'client' ? 'O Meu Inventário' : (
+            {userType === 'client' ? 'My Closet' : (
               <><span>Our Closet</span><span className="text-sm font-normal text-stone-500 bg-stone-100 px-2 py-0.5 rounded-full border border-stone-200">Comunidade</span></>
             )}
           </h1>
@@ -187,11 +187,43 @@ export function Inventory({
         )}
       </main>
 
+      {/* ===== BOTÃO FAB ADICIONAR (VERDE) ===== */}
+      {userType === 'client' && (
+        <div
+          onClick={() => setShowAddDialog(true)}
+          style={{
+            position: 'fixed',
+            bottom: '32px',
+            right: '32px',
+            width: '64px',
+            height: '64px',
+            backgroundColor: '#10b981',
+            borderRadius: '50%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            boxShadow: '0 10px 30px rgba(16, 185, 129, 0.4)',
+            zIndex: 10000,
+            transition: 'all 0.3s ease'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = 'scale(1.1)';
+            e.currentTarget.style.backgroundColor = '#059669';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = 'scale(1)';
+            e.currentTarget.style.backgroundColor = '#10b981';
+          }}
+        >
+          <Plus style={{ width: '32px', height: '32px', color: 'white', strokeWidth: 3 }} />
+        </div>
+      )}
+
       <AddItemDialog open={showAddDialog} onOpenChange={setShowAddDialog} onAdd={onAddItem} />
 
-      {/* --- MODAL DE ESTATÍSTICAS (AJUSTADO) --- */}
+      {/* --- MODAL DE ESTATÍSTICAS --- */}
       <Dialog open={showStatsDialog} onOpenChange={setShowStatsDialog}>
-        {/* max-w-5xl = Grande mas não gigante; max-h-[85vh] para caber no ecrã */}
         <DialogContent className="max-w-5xl w-full max-h-[85vh] overflow-y-auto">
           <DialogHeader className="mb-4">
             <DialogTitle className="text-xl font-semibold text-emerald-950 flex items-center gap-2">
@@ -202,89 +234,76 @@ export function Inventory({
             </DialogDescription>
           </DialogHeader>
 
-          {/* KPIs: Layout espaçoso, texto normal */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-             <Card className="p-4 bg-emerald-50/50 border-emerald-100 flex flex-col">
-                <p className="text-xs font-medium text-emerald-600 uppercase tracking-wide">Total de Peças</p>
-                <p className="text-2xl font-bold text-emerald-900 mt-1">{totalItems}</p>
-             </Card>
-             <Card className="p-4 bg-blue-50/50 border-blue-100 flex flex-col">
-                <p className="text-xs font-medium text-blue-600 uppercase tracking-wide">Estação Dominante</p>
-                <p className="text-xl font-bold text-blue-900 mt-1 truncate">{dominantSeason}</p>
-             </Card>
-             <Card className="p-4 bg-amber-50/50 border-amber-100 flex flex-col">
-                <p className="text-xs font-medium text-amber-600 uppercase tracking-wide">Material Top</p>
-                <p className="text-xl font-bold text-amber-900 mt-1 truncate">{topMaterial}</p>
-             </Card>
-             <Card className="p-4 bg-purple-50/50 border-purple-100 flex flex-col">
-                <p className="text-xs font-medium text-purple-600 uppercase tracking-wide">Top Categoria</p>
-                <p className="text-xl font-bold text-purple-900 mt-1 truncate">{topCategory}</p>
-             </Card>
-          </div>
+          {totalItems > 0 ? (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                 <Card className="p-4 bg-emerald-50/50 border-emerald-100 flex flex-col">
+                    <p className="text-xs font-medium text-emerald-600 uppercase tracking-wide">Total de Peças</p>
+                    <p className="text-2xl font-bold text-emerald-900 mt-1">{totalItems}</p>
+                 </Card>
+                 <Card className="p-4 bg-blue-50/50 border-blue-100 flex flex-col">
+                    <p className="text-xs font-medium text-blue-600 uppercase tracking-wide">Estação Dominante</p>
+                    <p className="text-xl font-bold text-blue-900 mt-1 truncate">{dominantSeason}</p>
+                 </Card>
+                 <Card className="p-4 bg-amber-50/50 border-amber-100 flex flex-col">
+                    <p className="text-xs font-medium text-amber-600 uppercase tracking-wide">Material Top</p>
+                    <p className="text-xl font-bold text-amber-900 mt-1 truncate">{topMaterial}</p>
+                 </Card>
+                 <Card className="p-4 bg-purple-50/50 border-purple-100 flex flex-col">
+                    <p className="text-xs font-medium text-purple-600 uppercase tracking-wide">Top Categoria</p>
+                    <p className="text-xl font-bold text-purple-900 mt-1 truncate">{topCategory}</p>
+                 </Card>
+              </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-             {/* Gráfico 1: Materiais */}
-             <Card className="p-6 border-stone-200 shadow-sm flex flex-col">
-                <h3 className="text-sm font-semibold text-stone-700 uppercase mb-4 flex items-center gap-2">
-                  <Zap className="h-4 w-4 text-stone-400"/> Composição de Materiais
-                </h3>
-                <div className="h-72 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={materialData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={85}
-                        paddingAngle={5}
-                        dataKey="value"
-                      >
-                        {materialData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={['#059669', '#0284c7', '#d97706', '#78716c', '#dc2626'][index % 5]} />
-                        ))}
-                      </Pie>
-                      <RechartsTooltip contentStyle={{ fontSize: '12px' }} />
-                      <Legend verticalAlign="middle" align="right" layout="vertical" iconType="circle" wrapperStyle={{ fontSize: '12px' }}/>
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-             </Card>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                 <Card className="p-6 border-stone-200 shadow-sm flex flex-col">
+                    <h3 className="text-sm font-semibold text-stone-700 uppercase mb-4 flex items-center gap-2">
+                      <Zap className="h-4 w-4 text-stone-400"/> Composição de Materiais
+                    </h3>
+                    <div className="h-72 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={materialData}
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={60}
+                            outerRadius={85}
+                            paddingAngle={5}
+                            dataKey="value"
+                          >
+                            {materialData.map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={['#059669', '#0284c7', '#d97706', '#78716c', '#dc2626'][index % 5]} />
+                            ))}
+                          </Pie>
+                          <RechartsTooltip contentStyle={{ fontSize: '12px' }} />
+                          <Legend verticalAlign="middle" align="right" layout="vertical" iconType="circle" wrapperStyle={{ fontSize: '12px' }}/>
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                 </Card>
 
-             {/* Gráfico 2: Estações */}
-             <Card className="p-6 border-stone-200 shadow-sm flex flex-col">
-                <h3 className="text-sm font-semibold text-stone-700 uppercase mb-4 flex items-center gap-2">
-                  <Thermometer className="h-4 w-4 text-stone-400"/> Distribuição por Estação
-                </h3>
-                <div className="h-72 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={seasonData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                      <XAxis dataKey="name" axisLine={false} tickLine={false} fontSize={12} tick={{ fill: '#78716c' }} dy={10} />
-                      <YAxis axisLine={false} tickLine={false} fontSize={12} tick={{ fill: '#78716c' }} />
-                      <RechartsTooltip cursor={{fill: '#f5f5f4'}} contentStyle={{ fontSize: '12px' }} />
-                      <Bar dataKey="value" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={40} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-             </Card>
-          </div>
-
-          {/* Lista de Top Categorias */}
-          <div className="mt-6">
-            <h3 className="text-sm font-semibold text-stone-700 uppercase mb-3 flex items-center gap-2">
-               <Shirt className="h-4 w-4 text-stone-400"/> Top Categorias
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-               {topCategories.map(([cat, count], idx) => (
-                  <div key={cat} className="bg-stone-50 rounded-lg p-3 flex items-center justify-between border border-stone-100">
-                     <span className="text-sm font-medium text-stone-700">#{idx + 1} {cat}</span>
-                     <Badge variant="secondary" className="bg-white text-stone-600 text-xs font-normal border border-stone-200">{count} peças</Badge>
-                  </div>
-               ))}
-            </div>
-          </div>
-
+                 <Card className="p-6 border-stone-200 shadow-sm flex flex-col">
+                    <h3 className="text-sm font-semibold text-stone-700 uppercase mb-4 flex items-center gap-2">
+                      <Thermometer className="h-4 w-4 text-stone-400"/> Distribuição por Estação
+                    </h3>
+                    <div className="h-72 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={seasonData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                          <XAxis dataKey="name" axisLine={false} tickLine={false} fontSize={12} tick={{ fill: '#78716c' }} dy={10} />
+                          <YAxis axisLine={false} tickLine={false} fontSize={12} tick={{ fill: '#78716c' }} />
+                          <RechartsTooltip cursor={{fill: '#f5f5f4'}} contentStyle={{ fontSize: '12px' }} />
+                          <Bar dataKey="value" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={40} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                 </Card>
+              </div>
+            </>
+          ) : (
+            <div className="text-center py-10 text-stone-500">Sem dados suficientes para gerar estatísticas.</div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
@@ -296,32 +315,22 @@ export function Inventory({
 function getMaterialData(items: ClothingItem[]) {
   // O "|| []" impede o site de ir abaixo se uma peça não tiver materiais
   const allMaterials = items.flatMap(i => i.materials || []);
-
   const counts: Record<string, number> = {};
   allMaterials.forEach(m => {
     if (m) counts[m] = (counts[m] || 0) + 1;
   });
-
-  return Object.entries(counts)
-    .map(([name, value]) => ({ name, value }))
-    .sort((a, b) => b.value - a.value)
-    .slice(0, 5);
+  return Object.entries(counts).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 5);
 }
 
 function getSeasonData(items: ClothingItem[]) {
   const seasons = ['Inverno', 'Outono', 'Primavera', 'Verão'];
   const counts: Record<string, number> = { 'Inverno': 0, 'Outono': 0, 'Primavera': 0, 'Verão': 0 };
-
   items.forEach(item => {
-    // Proteção contra seasons vazias
     (item.seasons || []).forEach(s => {
       if (counts[s] !== undefined) counts[s]++;
     });
   });
-
-  return Object.entries(counts)
-    .map(([name, value]) => ({ name, value }))
-    .sort((a, b) => b.value - a.value);
+  return Object.entries(counts).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
 }
 
 function getTopCategories(items: ClothingItem[]) {
@@ -329,8 +338,5 @@ function getTopCategories(items: ClothingItem[]) {
   items.forEach(i => {
     if (i.type) counts[i.type] = (counts[i.type] || 0) + 1;
   });
-
-  return Object.entries(counts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3);
+  return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 3);
 }
