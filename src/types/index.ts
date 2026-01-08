@@ -13,7 +13,7 @@ export interface ClothingItem {
   windproof: boolean;
   seasons: string[];
   image: string;
-  status: 'clean' | 'dirty';
+  status: "clean" | "dirty";
   favorite: boolean;
   isPublic?: boolean;
   ownerName?: string;
@@ -21,7 +21,7 @@ export interface ClothingItem {
   ownerId?: string;
 }
 
-export type UserType = 'visitor' | 'client' | null;
+export type UserType = "visitor" | "client" | null;
 
 export interface UserProfile {
   user_id: string;
