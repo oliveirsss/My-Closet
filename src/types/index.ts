@@ -19,9 +19,12 @@ export interface ClothingItem {
   ownerName?: string;
   ownerAvatar?: string;
   ownerId?: string;
+  isLikedByMe?: boolean;
 }
 
 export type UserType = "visitor" | "client" | null;
+
+export type Screen = "login" | "dashboard" | "inventory" | "detail" | "search";
 
 export interface UserProfile {
   user_id: string;

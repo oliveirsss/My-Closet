@@ -1,8 +1,6 @@
-from fastapi import APIRouter, Header, HTTPException
-from database import supabase, get_user_from_token
-from schemas import ImageUpload
+from fastapi import APIRouter, Header, HTTPException, UploadFile, File
+from database import get_user_from_token
 from supabase import create_client
-import base64
 import uuid
 import os
 
@@ -10,13 +8,13 @@ router = APIRouter()
 
 
 @router.post("/upload-image")
-def upload_image(data: ImageUpload, authorization: str = Header(None)):
+async def upload_image(file: UploadFile = File(...), authorization: str = Header(None)):
     # 1. Validar Utilizador
     user = get_user_from_token(authorization)
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # 2. Configurar Admin Temporário (para passar por cima das permissões)
+    # 2. Configurar Admin
     service_key = os.environ.get("SUPABASE_SERVICE_KEY")
     url = os.environ.get("SUPABASE_URL")
     bucket_name = "make-1d4585bc-closet-images"
@@ -27,39 +25,38 @@ def upload_image(data: ImageUpload, authorization: str = Header(None)):
     try:
         admin_supabase = create_client(url, service_key)
 
-        # 3. Preparar Imagem
-        if ';base64,' in data.image:
-            _, imgstr = data.image.split(';base64,')
-        else:
-            imgstr = data.image
+        # 3. Preparar Ficheiro
+        file_ext = file.filename.split(".")[-1]
+        file_path = f"{user.user.id}/{uuid.uuid4()}.{file_ext}"
 
-        image_bytes = base64.b64decode(imgstr)
-        file_path = f"{user.user.id}/{uuid.uuid4()}_{data.fileName}"
+        # Ler o conteúdo do ficheiro
+        file_content = await file.read()
 
         # 4. Upload (como Admin)
         admin_supabase.storage.from_(bucket_name).upload(
             path=file_path,
-            file=image_bytes,
-            file_options={"content-type": "image/jpeg"}
+            file=file_content,
+            file_options={"content-type": file.content_type}
         )
 
-        # 5. Gerar Link (A CORREÇÃO ESTÁ AQUI: Usamos admin_supabase também)
-        res = admin_supabase.storage.from_(bucket_name).create_signed_url(file_path, 31536000)  # Válido por 1 ano
+        # 5. Gerar URL (Signed URL para garantir acesso mesmo se o bucket for privado)
+        # 10 anos de validade
+        response_signed = admin_supabase.storage.from_(bucket_name).create_signed_url(file_path, 315360000)
+        
+        # O método create_signed_url retorna um dict ou string dependendo da versão, 
+        # mas normalmente é um dict com 'signedURL' ou 'signedUrl'.
+        # Vamos verificar o retorno. Na lib 'supabase' python, create_signed_url retorna um dict: {'signedURL': '...'}
+        
+        # Ajuste para garantir robustez
+        if isinstance(response_signed, dict) and 'signedURL' in response_signed:
+            public_url = response_signed['signedURL']
+        else:
+             # Fallback ou se a versão da lib for diferente, tenta assumir que é directo ou outro formato
+             # Mas assumindo a versão standard do supabase-py
+             public_url = response_signed.get('signedURL') if isinstance(response_signed, dict) else str(response_signed)
 
-        # O método create_signed_url pode retornar a URL diretamente ou num dict, dependendo da versão.
-        # O Supabase-py geralmente retorna {'signedURL': '...'} ou string.
-        # Vamos garantir que não falha:
-        final_url = res if isinstance(res, str) else res.get("signedURL")
-
-        return {"url": final_url, "path": file_path}
+        return {"url": public_url}
 
     except Exception as e:
         print(f"Erro upload imagem: {e}")
-        # Se o erro for do Supabase, tentamos extrair a mensagem
-        error_detail = str(e)
-        if hasattr(e, 'message'):
-            error_detail = e.message
-        elif hasattr(e, 'json'):
-            error_detail = str(e.json())
-
-        raise HTTPException(status_code=500, detail=f"Image upload failed: {error_detail}")
+        raise HTTPException(status_code=500, detail=str(e))

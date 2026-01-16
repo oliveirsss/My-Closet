@@ -22,27 +22,31 @@ export function OutfitMannequin({
   // Organizar itens por posição no corpo
   const getAccessories = () =>
     outerLayer.items.filter((item) => item.category === "accessories");
+  // Helper to identify bottoms (robust check)
+  const isBottom = (type: string) => {
+    const t = type.toLowerCase();
+    return (
+      t.includes("calça") ||
+      t.includes("calca") ||
+      t.includes("short") ||
+      t.includes("jeans") ||
+      t.includes("trousers")
+    );
+  };
+
   const getTops = () => [
-    ...baseLayer.items.filter(
-      (item) => !item.item.type.toLowerCase().includes("calça"),
-    ),
-    ...insulationLayer.items.filter(
-      (item) => !item.item.type.toLowerCase().includes("calça"),
-    ),
+    ...baseLayer.items.filter((item) => !isBottom(item.item.type)),
+    ...insulationLayer.items.filter((item) => !isBottom(item.item.type)),
     ...outerLayer.items.filter(
       (item) =>
         item.category === "jacket" ||
-        (!item.category && !item.item.type.toLowerCase().includes("calça")),
+        (!item.category && !isBottom(item.item.type)),
     ),
   ];
 
   const getBottoms = () => [
-    ...baseLayer.items.filter((item) =>
-      item.item.type.toLowerCase().includes("calça"),
-    ),
-    ...insulationLayer.items.filter((item) =>
-      item.item.type.toLowerCase().includes("calça"),
-    ),
+    ...baseLayer.items.filter((item) => isBottom(item.item.type)),
+    ...insulationLayer.items.filter((item) => isBottom(item.item.type)),
   ];
 
   const getShoes = () =>
@@ -101,14 +105,7 @@ export function OutfitMannequin({
     <div className="space-y-8">
       <Card className="overflow-hidden bg-gradient-to-br from-white via-stone-50/30 to-white border-stone-200/80 shadow-2xl">
         {/* Header */}
-        <div className="px-10 pt-10 pb-6">
-          <h3 className="text-2xl font-bold text-stone-900 tracking-tight mb-1">
-            Visualização do Outfit
-          </h3>
-          <p className="text-sm text-stone-500">
-            Recomendação personalizada baseada nas condições meteorológicas
-          </p>
-        </div>
+
 
         {/* Mannequin Visualization */}
         <div className="px-10 pb-10">
@@ -229,28 +226,7 @@ export function OutfitMannequin({
                         />
                       </div>
                     ))}
-                    {shoes.length === 1 && (
-                      <div
-                        className="w-20 h-20 rounded border border-gray-300 bg-white flex items-center justify-center cursor-pointer hover:border-blue-500 hover:shadow-md transition-all relative group"
-                        onClick={() => {
-                          onViewItem?.(shoes[0].item);
-                          setSelectedItem(shoes[0].item);
-                        }}
-                      >
-                        <img
-                          src={
-                            shoes[0].item.image ||
-                            "https://via.placeholder.com/64?text=Item"
-                          }
-                          alt={`${shoes[0].item.name} (2)`}
-                          className="w-full h-full object-contain p-1"
-                          onError={(e) => {
-                            e.currentTarget.src =
-                              "https://via.placeholder.com/64?text=Item";
-                          }}
-                        />
-                      </div>
-                    )}
+
                   </div>
                 )}
 

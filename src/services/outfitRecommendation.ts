@@ -126,7 +126,7 @@ function scoreItem(
 
   // Bonus for favorite items (user preference)
   if (item.favorite) {
-    score += 10;
+    score += 30;
   }
 
   return score;
@@ -153,40 +153,40 @@ function generateItemReasoning(
     weather.temperature <= item.tempMax
   ) {
     reasons.push(
-      `perfect temperature range (${item.tempMin}°C - ${item.tempMax}°C) for current ${weather.temperature}°C`,
+      `Intervalo de temperatura perfeito (${item.tempMin}°C - ${item.tempMax}°C) para os ${weather.temperature}°C atuais`,
     );
   } else {
     reasons.push(
-      `temperature range (${item.tempMin}°C - ${item.tempMax}°C) suitable for ${weather.temperature}°C`,
+      `Intervalo de temperatura (${item.tempMin}°C - ${item.tempMax}°C) adequado para ${weather.temperature}°C`,
     );
   }
 
   // Layer-specific reasoning
   if (layer === 3) {
     if (weather.rain && item.waterproof) {
-      reasons.push("waterproof protection for rain");
+      reasons.push("proteção impermeável para a chuva");
     }
     if (
       weather.windSpeed &&
       weather.windSpeed >= RECOMMENDATION_THRESHOLDS.STRONG_WIND &&
       item.windproof
     ) {
-      reasons.push("windproof protection for strong winds");
+      reasons.push("proteção contra ventos fortes");
     }
   } else if (layer === 2) {
     if (weather.temperature < RECOMMENDATION_THRESHOLDS.MODERATE_TEMPERATURE) {
-      reasons.push("provides insulation for cooler weather");
+      reasons.push("fornece isolamento para o tempo mais fresco");
     }
   }
 
   // Favorite item
   if (item.favorite) {
-    reasons.push("marked as favorite");
+    reasons.push("marcado como favorito");
   }
 
   return reasons.length > 0
     ? `${reasons.join(", ")}`
-    : "selected based on availability and basic suitability";
+    : "selecionado com base na disponibilidade e adequação básica";
 }
 
 /**
@@ -253,6 +253,22 @@ const LAYER3_CATEGORIES = {
 };
 
 /**
+ * Categories for layer 2 items to ensure we recommend both tops and bottoms
+ */
+const LAYER2_CATEGORIES = {
+  legs: ["calça", "calças", "calções", "pants", "trousers", "jeans", "shorts"],
+  torso: [
+    "camisola",
+    "camisa",
+    "sweater",
+    "cardigan",
+    "pullover",
+    "hoodie",
+    "shirt",
+  ],
+};
+
+/**
  * Determines the category of an item for layer 3
  */
 function getLayer3Category(
@@ -268,6 +284,25 @@ function getLayer3Category(
       )
     ) {
       return category as "jacket" | "shoes" | "accessories";
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Determines the category of an item for layer 2
+ */
+function getLayer2Category(itemType: string): "legs" | "torso" | undefined {
+  const normalized = itemType.toLowerCase().trim().replace(/[-\s]/g, "");
+  for (const [category, types] of Object.entries(LAYER2_CATEGORIES)) {
+    if (
+      types.some(
+        (type) =>
+          normalized.includes(type.toLowerCase()) ||
+          type.toLowerCase().includes(normalized),
+      )
+    ) {
+      return category as "legs" | "torso";
     }
   }
   return undefined;
@@ -303,6 +338,7 @@ function recommendLayer(
   items: ClothingItem[],
   weather: WeatherData,
   layer: 1 | 2 | 3,
+  variant: number = 0,
 ): LayerRecommendation {
   // Filter items: only clean items of the correct layer AND valid item type
   const eligibleItems = items.filter(
@@ -315,7 +351,7 @@ function recommendLayer(
   if (eligibleItems.length === 0) {
     return {
       items: [],
-      reasoning: `No clean items available for layer ${layer}.`,
+      reasoning: `Sem itens limpos disponíveis para a camada ${layer}.`,
       isMissing: true,
     };
   }
@@ -354,10 +390,13 @@ function recommendLayer(
     const categoriesFound = new Set<string>();
 
     // Always try to get one jacket
-    const jacket = scoredItems.find(
+    const jacketCandidates = scoredItems.filter(
       (item) => getLayer3Category(item.item.type) === "jacket",
     );
-    if (jacket) {
+    if (jacketCandidates.length > 0) {
+      const index = variant % jacketCandidates.length;
+      const jacket = jacketCandidates[index];
+
       recommendations.push({
         item: jacket.item,
         reasoning: generateItemReasoning(jacket.item, weather, layer),
@@ -367,10 +406,13 @@ function recommendLayer(
     }
 
     // Try to get shoes
-    const shoes = scoredItems.find(
+    const shoeCandidates = scoredItems.filter(
       (item) => getLayer3Category(item.item.type) === "shoes",
     );
-    if (shoes) {
+    if (shoeCandidates.length > 0) {
+      const index = variant % shoeCandidates.length;
+      const shoes = shoeCandidates[index]; // Select based on variant
+
       recommendations.push({
         item: shoes.item,
         reasoning: generateItemReasoning(shoes.item, weather, layer),
@@ -385,10 +427,14 @@ function recommendLayer(
       (weather.windSpeed &&
         weather.windSpeed >= RECOMMENDATION_THRESHOLDS.STRONG_WIND)
     ) {
-      const accessory = scoredItems.find(
+      const accessoryCandidates = scoredItems.filter(
         (item) => getLayer3Category(item.item.type) === "accessories",
       );
-      if (accessory) {
+
+      if (accessoryCandidates.length > 0) {
+        const index = variant % accessoryCandidates.length;
+        const accessory = accessoryCandidates[index];
+
         recommendations.push({
           item: accessory.item,
           reasoning: generateItemReasoning(accessory.item, weather, layer),
@@ -411,27 +457,105 @@ function recommendLayer(
       items: recommendations,
       reasoning:
         recommendations.length > 0
-          ? `Recommended ${recommendations.length} item${recommendations.length > 1 ? "s" : ""} for protection layer`
-          : "No suitable items found",
+          ? `Recomendado(s) ${recommendations.length} item(s) para camada de proteção`
+          : "Nenhum item adequado encontrado",
       isMissing: recommendations.length === 0,
     };
   }
 
-  // For layers 1 and 2, recommend single best item (maintains backward compatibility concept)
-  const selectedItem = scoredItems[0]?.item || null;
+  // --- NEW LOGIC FOR LAYER 2 (Insulation) ---
+  // Ensure we recommend ONE bottom (legs) AND ONE top (torso) if needed
+  if (layer === 2) {
+    const recommendations: ItemRecommendation[] = [];
+
+    // 1. Always try to find a Bottom (Legs)
+    // Pants are essential unless it's a dress (not handled here yet) or similar
+    const legCandidates = scoredItems.filter(
+      (item) => getLayer2Category(item.item.type) === "legs",
+    );
+
+    if (legCandidates.length > 0) {
+      // Pick based on variant
+      const index = variant % legCandidates.length;
+      const legs = legCandidates[index];
+      recommendations.push({
+        item: legs.item,
+        reasoning: generateItemReasoning(legs.item, weather, layer),
+        // treating legs specially
+      });
+    }
+
+    // 2. Try to find a Top (Torso/Insulation)
+    // Only strictly needed if cold, but user might want one anyway or if it's their style
+    // If it's warm (> 20C), maybe we don't strictly *need* a layer 2 top if they have a layer 1 top
+    // But let's follow the standard logic: if it scores well (meaning temp is appropriate), suggest it.
+    const torsoCandidates = scoredItems.filter(
+      (item) => getLayer2Category(item.item.type) === "torso",
+    );
+
+    // Only recommend torso layer if weather actually calls for it (positive score or cold enough)
+    // OR if we have no other options
+    const needsInsulation =
+      weather.temperature < RECOMMENDATION_THRESHOLDS.MODERATE_TEMPERATURE;
+    // We filter torso candidates to those that trigger the "insulation needed" threshold
+    // or simply the best one if we have nothing else.
+    // Let's use the 'scoredItems' order. If the top item has a high score, it's good.
+
+    if (torsoCandidates.length > 0) {
+      // Pick based on variant
+      const index = variant % torsoCandidates.length;
+      const torsoItem = torsoCandidates[index];
+
+      // Recommend if it's needed OR if it has a good score (meaning it fits the temp)
+      if (needsInsulation || torsoItem.score > 50) {
+        recommendations.push({
+          item: torsoItem.item,
+          reasoning: generateItemReasoning(torsoItem.item, weather, layer),
+        });
+      }
+    }
+
+    // If we found specific category items, return them
+    if (recommendations.length > 0) {
+      return {
+        items: recommendations,
+        reasoning: `Recomendado(s) ${recommendations.length} item(s) para a Camada 2`,
+        isMissing: recommendations.length === 0,
+      };
+    }
+    // Fallback if categorization failed but we have items (should act like before)
+    // ... fall through to default single item picker logic below
+  }
+
+  // For layer 1, recommend single best item based on variant
+  // ... (existing logic) ...
+  const validCandidates = scoredItems.filter((s) => s.score > 0);
+
+  // If no positive scores, fall back to all items
+  const pool = validCandidates.length > 0 ? validCandidates : scoredItems;
+
+  let selectedItem = null;
+  if (pool.length > 0) {
+    // Determine which index to pick based on the variant
+    // variant 0 -> index 0 (best)
+    // variant 1 -> index 1 (second best)
+    // ... wrapping around
+    const index = variant % pool.length;
+    selectedItem = pool[index].item;
+  }
 
   return {
     items: selectedItem
       ? [
-          {
-            item: selectedItem,
-            reasoning: generateItemReasoning(selectedItem, weather, layer),
-          },
-        ]
+        {
+          item: selectedItem,
+          reasoning: generateItemReasoning(selectedItem, weather, layer),
+        },
+      ]
       : [],
     reasoning: selectedItem
       ? generateItemReasoning(selectedItem, weather, layer)
-      : `No suitable item found for layer ${layer}`,
+      : `Nenhum item adequado encontrado para a camada ${layer}`,
     isMissing: selectedItem === null,
   };
 }
@@ -453,6 +577,7 @@ function recommendLayer(
 export function recommendOutfit(
   items: ClothingItem[],
   weather: WeatherData,
+  variant: number = 0,
 ): OutfitRecommendation {
   // Normalize wind speed (default to 0 if not provided)
   const normalizedWeather: WeatherData = {
@@ -461,37 +586,11 @@ export function recommendOutfit(
   };
 
   // Generate recommendations for each layer
-  const baseLayer = recommendLayer(items, normalizedWeather, 1);
-  const insulationLayer = recommendLayer(items, normalizedWeather, 2);
-  const outerLayer = recommendLayer(items, normalizedWeather, 3);
+  const baseLayer = recommendLayer(items, normalizedWeather, 1, variant);
+  const insulationLayer = recommendLayer(items, normalizedWeather, 2, variant);
+  const outerLayer = recommendLayer(items, normalizedWeather, 3, variant);
 
-  // For layer 2 (insulation), filter out sweaters if temperature is high enough
-  // But always keep pants (they are essential clothing, not just insulation)
-  if (
-    normalizedWeather.temperature >=
-    RECOMMENDATION_THRESHOLDS.MODERATE_TEMPERATURE
-  ) {
-    const pantsItems = insulationLayer.items.filter((itemRec) => {
-      const type = itemRec.item.type.toLowerCase();
-      return (
-        type.includes("calças") ||
-        type.includes("pants") ||
-        type.includes("jeans") ||
-        type.includes("calções")
-      );
-    });
 
-    if (pantsItems.length > 0) {
-      // Keep only pants, remove sweaters
-      insulationLayer.items = pantsItems;
-      insulationLayer.reasoning = `Temperature (${normalizedWeather.temperature}°C) is warm - only lower body items recommended.`;
-    } else {
-      // No pants found, skip layer 2 entirely if too warm
-      insulationLayer.items = [];
-      insulationLayer.reasoning = `Temperature (${normalizedWeather.temperature}°C) is warm enough that an insulation layer is not needed.`;
-    }
-    insulationLayer.isMissing = false; // Not missing, just not needed for sweaters
-  }
 
   // Note: Layer 3 recommendations already handle multiple items (jacket, shoes, accessories)
   // in the recommendLayer function, so no additional logic needed here

@@ -29,9 +29,13 @@ import {
   XCircle,
   AlertTriangle,
   Package,
+  RefreshCw,
+  Crown,
+  Sparkles,
 } from "lucide-react";
 // API
 import { supabase } from "../../lib/supabase";
+import * as api from "../../services/api";
 // Outfit Recommendation Service
 import {
   recommendOutfit,
@@ -55,6 +59,7 @@ type UserProfileState = {
   avatar_url: string;
   bio: string;
   location: string;
+  id: string;
 };
 
 export function Dashboard({
@@ -69,7 +74,10 @@ export function Dashboard({
     avatar_url: "",
     bio: "",
     location: "",
+    id: "",
   });
+
+  const [isTopCreator, setIsTopCreator] = useState(false);
 
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isTravelOpen, setIsTravelOpen] = useState(false);
@@ -84,23 +92,39 @@ export function Dashboard({
     loading: true,
   });
 
+  const [outfitVariant, setOutfitVariant] = useState(0);
+
   // 2. Carregar Perfil (Direto do Supabase para ser mais robusto)
+  // 2. Carregar Perfil (Via API para consistência com o backend)
   useEffect(() => {
     const loadProfile = async () => {
       try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
+        // Tenta carregar do backend (onde os updates são gravados)
+        const { profile } = await api.getProfile();
+
+        if (profile) {
+          setUserProfile({
+            name: profile.name || "Utilizador",
+            avatar_url: profile.avatar_url || "",
+            bio: profile.bio || "",
+            location: profile.location || "",
+            id: profile.user_id,
+          });
+        }
+      } catch (error) {
+        console.error("Erro ao carregar perfil da API:", error);
+
+        // Fallback: Tenta carregar do Supabase se a API falhar
+        const { data: { user } } = await supabase.auth.getUser();
         if (user?.user_metadata) {
           setUserProfile({
             name: user.user_metadata.name || "Utilizador",
             avatar_url: user.user_metadata.avatar_url || "",
             bio: user.user_metadata.bio || "",
             location: user.user_metadata.location || "",
+            id: user.id || "",
           });
         }
-      } catch (error) {
-        console.error("Erro ao carregar perfil:", error);
       }
     };
     loadProfile();
@@ -114,7 +138,25 @@ export function Dashboard({
     }));
   };
 
-  // 3. Carregar Tempo
+  // 3. Carregar Tempo e Top Creator
+  useEffect(() => {
+    const checkTopCreator = async () => {
+      try {
+        if (!userProfile.id) return;
+        const { items: publicItems } = await api.getPublicItems();
+        const ownerCounts: Record<string, number> = {};
+        publicItems.forEach(item => { if (item.ownerId) ownerCounts[item.ownerId] = (ownerCounts[item.ownerId] || 0) + 1; });
+        const sortedOwners = Object.entries(ownerCounts).sort(([, a], [, b]) => b - a);
+        if (sortedOwners.length > 0) {
+          const [topCreatorId] = sortedOwners[0];
+          setIsTopCreator(topCreatorId === userProfile.id);
+        }
+      } catch (err) { console.error(err); }
+    };
+    checkTopCreator();
+  }, [userProfile.id]);
+
+  // 4. Carregar Tempo (Sempre que Location mudar)
   useEffect(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -182,7 +224,9 @@ export function Dashboard({
     humidity: weather.humidity,
   };
 
-  const outfitRecommendation = recommendOutfit(items, weatherData);
+
+
+  const outfitRecommendation = recommendOutfit(items, weatherData, outfitVariant);
   const cleanItems = items.filter((item) => item.status === "clean").length;
   const dirtyItems = items.filter((item) => item.status === "dirty").length;
   const missingLayers = [1, 2, 3].filter(
@@ -208,12 +252,17 @@ export function Dashboard({
             <div className="w-12 h-12">
               {userProfile.avatar_url ? (
                 <div
-                  className={`w-12 h-12 rounded-full overflow-hidden border border-emerald-700 ${isDark ? "bg-stone-700" : "bg-stone-100"} shadow-sm`}
+                  className="w-12 h-12 rounded-full overflow-hidden border border-emerald-700 bg-stone-100 shadow-sm"
                 >
                   <img
-                    src={userProfile.avatar_url}
+                    src={api.getAssetUrl(userProfile.avatar_url)}
                     alt="Avatar"
                     className="w-full h-full object-cover"
+                    onError={(e) => {
+                      // Se falhar e a URL não for vazia, esconde
+                      console.error("Erro a carregar avatar:", userProfile.avatar_url);
+                      e.currentTarget.style.display = 'none';
+                    }}
                   />
                 </div>
               ) : (
@@ -224,8 +273,14 @@ export function Dashboard({
             </div>
 
             <div>
-              <h1 className="text-xl text-emerald-900 font-semibold">
+              <h1 className="text-xl text-emerald-900 font-semibold flex items-center gap-2">
                 Bem-vindo de volta!
+                {isTopCreator && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold border border-amber-200 uppercase tracking-wide">
+                    <Sparkles className="w-3 h-3" />
+                    Top Creator
+                  </span>
+                )}
               </h1>
               <div
                 className="flex items-center gap-2 group cursor-pointer"
@@ -268,7 +323,10 @@ export function Dashboard({
 
       <main className="max-w-7xl mx-auto p-6 space-y-6">
         {/* Widget Tempo */}
-        <Card className="bg-gradient-to-br from-sky-400 to-blue-500 text-white p-6 border-0 shadow-lg">
+        <Card
+          className="text-white p-6 border-0 shadow-lg"
+          style={{ background: 'linear-gradient(135deg, #60a5fa 0%, #2563eb 100%)' }}
+        >
           <div className="flex items-start justify-between">
             <div>
               {weather.loading ? (
@@ -305,27 +363,38 @@ export function Dashboard({
               )}
               {(weather.temp < 10 ||
                 (weather.windSpeed && weather.windSpeed >= 10)) && (
-                <div className="flex items-center gap-2 justify-end">
-                  <Wind className="h-5 w-5" />
-                  <span>
-                    {weather.windSpeed && weather.windSpeed >= 10
-                      ? `Vento Forte (${Math.round(weather.windSpeed)} m/s)`
-                      : "Vento Frio"}
-                  </span>
-                </div>
-              )}
+                  <div className="flex items-center gap-2 justify-end">
+                    <Wind className="h-5 w-5" />
+                    <span>
+                      {weather.windSpeed && weather.windSpeed >= 10
+                        ? `Vento Forte (${Math.round(weather.windSpeed)} m/s)`
+                        : "Vento Frio"}
+                    </span>
+                  </div>
+                )}
             </div>
           </div>
         </Card>
 
         {/* Sugestão do Dia */}
         <section>
-          <h2 className="text-2xl font-semibold mb-4 text-emerald-900 flex items-center gap-2">
-            <span className="bg-emerald-100 p-1.5 rounded-md">
-              <TrendingUp className="h-5 w-5 text-emerald-700" />
-            </span>
-            Sugestão do Dia
-          </h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-semibold text-emerald-900 flex items-center gap-2">
+              <span className="bg-emerald-100 p-1.5 rounded-md">
+                <TrendingUp className="h-5 w-5 text-emerald-700" />
+              </span>
+              Sugestão do Dia
+            </h2>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setOutfitVariant(prev => prev + 1)}
+              className="text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Nova Sugestão
+            </Button>
+          </div>
 
           <OutfitMannequin
             baseLayer={outfitRecommendation.baseLayer}

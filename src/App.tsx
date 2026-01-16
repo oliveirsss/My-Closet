@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { LoginScreen } from "./features/auth/LoginScreen";
+import { LoadingScreen } from "./components/LoadingScreen";
 import { Dashboard } from "./features/dashboard/Dashboard";
 import { Inventory } from "./features/inventory/Inventory";
 import { ItemDetail } from "./features/inventory/ItemDetail";
@@ -15,21 +16,45 @@ function App() {
   const [items, setItems] = useState<ClothingItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
+  // viewMode: 'personal' (My Closet) or 'community' (Our Closet)
+  const [viewMode, setViewMode] = useState<"personal" | "community">("personal");
+  const [showLikedOnly, setShowLikedOnly] = useState(false); // New state for Liked Items filter
 
   const [ownerFilter, setOwnerFilter] = useState<{
     id: string;
     name: string;
+    avatar?: string;
   } | null>(null);
 
+  // 1. Session Check & Auth Listener
   useEffect(() => {
+    // Check initial session
     checkSession();
+
+    // Listen for auth changes (token refresh, sign out, etc.)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.access_token) {
+        api.setAccessToken(session.access_token);
+        setUserId(session.user.id);
+        // Only set type/screen if not already set (to avoid resetting state on refresh)
+        if (!userType) {
+          setUserType("client");
+          setCurrentScreen("dashboard");
+        }
+      } else {
+        // Handle logout if needed
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
+  // 2. Load Items on state change
   useEffect(() => {
     if (userType) {
       loadItems();
     }
-  }, [userType, userId]);
+  }, [userType, userId, viewMode, showLikedOnly]); // Added showLikedOnly dependency
 
   async function checkSession() {
     try {
@@ -41,25 +66,47 @@ function App() {
         setUserId(session.user.id);
         setUserType("client");
         setCurrentScreen("dashboard");
+      } else {
+        // No session, stop loading immediately
+        setLoading(false);
       }
     } catch (error) {
       console.error("Error checking session:", error);
-    } finally {
       setLoading(false);
     }
+    // Removed finally block that accessed 'session' incorrectly
   }
 
   async function loadItems() {
+    setLoading(true); // Show loading screen whenever fetching items (switching views etc)
     try {
       if (userType === "visitor") {
         const { items: loadedItems } = await api.getPublicItems();
         setItems(loadedItems);
       } else if (userType === "client" && userId) {
-        const { items: loadedItems } = await api.getItems();
-        setItems(loadedItems);
+        if (viewMode === "community") {
+          if (showLikedOnly) {
+            const { items: loadedItems } = await api.getLikedItems();
+            setItems(loadedItems);
+          } else {
+            const { items: loadedItems } = await api.getPublicItems();
+            setItems(loadedItems);
+          }
+        } else {
+          // Personal Closet
+          const { items: loadedItems } = await api.getItems();
+          if (showLikedOnly) {
+            setItems(loadedItems.filter(i => i.favorite));
+          } else {
+            setItems(loadedItems);
+          }
+        }
       }
     } catch (error) {
       console.error("Error loading items:", error);
+    } finally {
+      // Turn off global loading only after items are fetched
+      setLoading(false);
     }
   }
 
@@ -70,6 +117,7 @@ function App() {
   ) => {
     if (type === "visitor") {
       setUserType(type);
+      setViewMode("community"); // FORCE COMMUNITY VIEW FOR VISITORS
       setCurrentScreen("inventory");
       return;
     }
@@ -101,6 +149,8 @@ function App() {
     setSelectedItem(null);
     setItems([]);
     setOwnerFilter(null);
+    setViewMode("personal");
+    setShowLikedOnly(false);
   };
 
   const handleAddItem = async (item: ClothingItem) => {
@@ -109,9 +159,43 @@ function App() {
   };
 
   const handleUpdateItem = async (updatedItem: ClothingItem) => {
-    const { item } = await api.updateItem(updatedItem.id, updatedItem);
-    setItems(items.map((i) => (i.id === item.id ? item : i)));
-    if (selectedItem?.id === item.id) setSelectedItem(item);
+    // Determine the action based on view mode (Community vs Personal)
+    if (viewMode === "community") {
+      // Logic for LIKES (Social)
+      const isLiked = !!updatedItem.isLikedByMe;
+      // NOTE: updatedItem comes with 'favorite' toggled from component, but we ignore that for social.
+      // We toggle isLikedByMe based on its current value (before valid click logic, but here we assume toggle)
+      // Wait, the FavoriteButton sends the item with 'favorite' property flipped if we don't change it.
+      // But simplified: we just toggle the boolean.
+
+      // Correct approach: Look at the item in state, not the incoming argument which might be misleading
+      const currentItem = items.find(i => i.id === updatedItem.id);
+      if (!currentItem) return;
+
+      const wasLiked = !!currentItem.isLikedByMe;
+      const newIsLiked = !wasLiked;
+
+      // Optimistic UI Update
+      setItems(items.map((i) => (i.id === updatedItem.id ? { ...i, isLikedByMe: newIsLiked } : i)));
+
+      try {
+        if (newIsLiked) {
+          await api.likeItem(updatedItem.id);
+        } else {
+          await api.unlikeItem(updatedItem.id);
+        }
+      } catch (error) {
+        // Revert on error
+        console.error("Error toggling like:", error);
+        setItems(items.map((i) => (i.id === updatedItem.id ? currentItem : i)));
+      }
+
+    } else {
+      // Logic for FAVORITES (Personal Owner)
+      const { item } = await api.updateItem(updatedItem.id, updatedItem);
+      setItems(items.map((i) => (i.id === item.id ? item : i)));
+      if (selectedItem?.id === item.id) setSelectedItem(item);
+    }
   };
 
   const handleDeleteItem = async (id: string) => {
@@ -121,8 +205,8 @@ function App() {
     setCurrentScreen("inventory");
   };
 
-  const handleViewOwnerProfile = (ownerId: string, ownerName: string) => {
-    setOwnerFilter({ id: ownerId, name: ownerName });
+  const handleViewOwnerProfile = (ownerId: string, ownerName: string, ownerAvatar?: string) => {
+    setOwnerFilter({ id: ownerId, name: ownerName, avatar: ownerAvatar });
     setSelectedItem(null);
     setCurrentScreen("inventory");
   };
@@ -132,12 +216,7 @@ function App() {
     setCurrentScreen("detail");
   };
 
-  if (loading)
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-white">
-        A carregar...
-      </div>
-    );
+  if (loading) return <LoadingScreen />;
 
   if (currentScreen === "login") return <LoginScreen onLogin={handleLogin} />;
 
@@ -150,6 +229,7 @@ function App() {
         onDelete={handleDeleteItem}
         isVisitor={userType === "visitor"}
         onViewOwner={handleViewOwnerProfile}
+        currentUserId={userId}
       />
     );
   }
@@ -184,6 +264,15 @@ function App() {
       onViewItem={handleViewDetail}
       ownerFilter={ownerFilter}
       onClearOwnerFilter={() => setOwnerFilter(null)}
+      onToggleFavorite={handleUpdateItem}
+      onViewOwner={handleViewOwnerProfile}
+      viewMode={viewMode}
+      onToggleViewMode={() => {
+        setViewMode(prev => prev === "personal" ? "community" : "personal");
+        setShowLikedOnly(false); // Reset filter when switching modes
+      }}
+      showLikedOnly={showLikedOnly}
+      onToggleLikedOnly={() => setShowLikedOnly(!showLikedOnly)}
     />
   );
 }

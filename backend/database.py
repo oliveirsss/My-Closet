@@ -24,8 +24,17 @@ def get_user_from_token(token: str):
     try:
         # Remove "Bearer " se existir
         clean_token = token.replace("Bearer ", "")
-        user = supabase.auth.get_user(clean_token)
-        return user
+        user_response = supabase.auth.get_user(clean_token)
+        
+        # In newer supabase-py, it returns a UserResponse object.
+        # We need to access .user property.
+        if user_response and hasattr(user_response, 'user'):
+             return user_response # returning the response object wrapper which has .user is fine if downstream uses .user
+             # Wait, existing code uses user.user.id. 
+             # If get_user returns UserResponse, then user.user.id is correct (UserResponse.user.id).
+             # BUT if get_user fails, does it return None?
+        
+        return user_response 
     except Exception as e:
         print(f"Auth Error: {e}")
         return None

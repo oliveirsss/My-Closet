@@ -22,12 +22,12 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
   const handleClientLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    
+
     try {
       if (isSignup) {
         // Sign up
         const { user } = await api.signup(email, password, name);
-        
+
         // After signup, sign in
         const { data, error } = await supabase.auth.signInWithPassword({
           email,
@@ -57,7 +57,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-stone-100 p-4">
-      <div 
+      <div
         className="absolute inset-0 opacity-5"
         style={{
           backgroundImage: 'url("https://images.unsplash.com/photo-1489987707025-afc232f7ea0f?w=1200")',
@@ -65,7 +65,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           backgroundPosition: 'center'
         }}
       />
-      
+
       <div className="w-full max-w-5xl relative z-10">
         <div className="text-center mb-12">
           <h1 className="text-6xl mb-4 text-emerald-900">My Closet</h1>
@@ -91,8 +91,8 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                   {isSignup ? 'Criar Conta' : 'Acesso Pessoal'}
                 </h2>
                 <p className="text-stone-600">
-                  {isSignup 
-                    ? 'Crie a sua conta para começar a gerir o seu guarda-roupa' 
+                  {isSignup
+                    ? 'Crie a sua conta para começar a gerir o seu guarda-roupa'
                     : 'Entre para gerir o seu guarda-roupa privado'}
                 </p>
               </div>
@@ -139,9 +139,9 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                   />
                 </div>
 
-                <Button 
-                  type="submit" 
-                  className="w-full bg-emerald-700 hover:bg-emerald-800"
+                <Button
+                  type="submit"
+                  className="w-full bg-emerald-700 hover:bg-emerald-800 text-white"
                   disabled={loading}
                 >
                   {loading ? 'A processar...' : (isSignup ? 'Criar Conta' : 'Entrar')}
@@ -181,9 +181,9 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                   </ul>
                 </div>
 
-                <Button 
+                <Button
                   onClick={handleVisitorAccess}
-                  className="w-full bg-stone-700 hover:bg-stone-800"
+                  className="w-full bg-stone-700 hover:bg-stone-800 text-white"
                 >
                   Aceder como Visitante
                 </Button>
