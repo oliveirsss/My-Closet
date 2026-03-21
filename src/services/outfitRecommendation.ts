@@ -547,11 +547,11 @@ function recommendLayer(
   return {
     items: selectedItem
       ? [
-        {
-          item: selectedItem,
-          reasoning: generateItemReasoning(selectedItem, weather, layer),
-        },
-      ]
+          {
+            item: selectedItem,
+            reasoning: generateItemReasoning(selectedItem, weather, layer),
+          },
+        ]
       : [],
     reasoning: selectedItem
       ? generateItemReasoning(selectedItem, weather, layer)
@@ -590,11 +590,6 @@ export function recommendOutfit(
   const insulationLayer = recommendLayer(items, normalizedWeather, 2, variant);
   const outerLayer = recommendLayer(items, normalizedWeather, 3, variant);
 
-
-
-  // Note: Layer 3 recommendations already handle multiple items (jacket, shoes, accessories)
-  // in the recommendLayer function, so no additional logic needed here
-
   return {
     baseLayer,
     insulationLayer,
@@ -602,23 +597,10 @@ export function recommendOutfit(
     weatherContext: normalizedWeather,
   };
 }
-
-/**
- * Determines if an insulation layer (layer 2) is needed based on temperature.
- *
- * @param temperature - Current temperature in Celsius
- * @returns true if an insulation layer is recommended
- */
 export function isInsulationNeeded(temperature: number): boolean {
   return temperature < RECOMMENDATION_THRESHOLDS.MODERATE_TEMPERATURE;
 }
 
-/**
- * Determines if an outer layer (layer 3) is recommended based on weather conditions.
- *
- * @param weather - Current weather conditions
- * @returns true if an outer layer is recommended
- */
 export function isOuterLayerRecommended(weather: WeatherData): boolean {
   if (weather.rain) {
     return true; // Always recommend outer layer in rain

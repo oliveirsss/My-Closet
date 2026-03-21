@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Header, HTTPException
 from database import get_user_from_token
-from schemas import ClothingItem
+from schemas.clothing import ClothingItem
 from supabase import create_client
 import os
 

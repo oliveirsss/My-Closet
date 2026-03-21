@@ -1,10 +1,11 @@
+import os
+
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse
-from database import supabase, get_user_from_token
-# Agora importamos tudo do schemas.py
-from schemas import UserSignup, UserProfileUpdate
 from supabase import create_client
-import os
+
+from database import get_user_from_token, supabase
+from schemas.auth import UserProfileUpdate, UserSignup
 
 router = APIRouter()
 
@@ -41,16 +42,16 @@ def get_profile(authorization: str = Header(None)):
         # Configurar Admin para ler da BD (bypassing RLS)
         service_key = os.environ.get("SUPABASE_SERVICE_KEY")
         url = os.environ.get("SUPABASE_URL")
-        
+
         if not service_key:
-             raise HTTPException(status_code=500, detail="Erro de configuração")
+            raise HTTPException(status_code=500, detail="Erro de configuração")
 
         admin_supabase = create_client(url, service_key)
 
         # Tenta ler da tabela 'profiles' (onde guardamos custom fields e URL da foto)
         # O user.user.id é o UUID do Supabase Auth
         res = admin_supabase.table("profiles").select("*").eq("user_id", user.user.id).execute()
-        
+
         # Se existir perfil na tabela, devolve.
         if res.data and len(res.data) > 0:
             profile_data = res.data[0]
@@ -86,7 +87,7 @@ def update_profile(data: UserProfileUpdate, authorization: str = Header(None)):
         url = os.environ.get("SUPABASE_URL")
 
         if not service_key:
-             raise HTTPException(status_code=500, detail="Erro de configuração: SERVICE_KEY em falta")
+            raise HTTPException(status_code=500, detail="Erro de configuração: SERVICE_KEY em falta")
 
         admin_supabase = create_client(url, service_key)
 
@@ -99,11 +100,11 @@ def update_profile(data: UserProfileUpdate, authorization: str = Header(None)):
             "location": data.location,
             "updated_at": "now()"
         }
-        
-        # Upsert: Cria se não existir, atualiza se existir (Usando Admin Client)
-        res = admin_supabase.table("profiles").upsert(profile_payload).execute()
 
-        # 2. (Opcional) Update no Auth Metadata para manter sincronizado 
+        # Upsert: Cria se não existir, atualiza se existir (Usando Admin Client)
+        admin_supabase.table("profiles").upsert(profile_payload).execute()
+
+        # 2. (Opcional) Update no Auth Metadata para manter sincronizado
         admin_supabase.auth.admin.update_user_by_id(
             uid=user.user.id,
             attributes={
