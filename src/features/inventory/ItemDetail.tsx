@@ -10,7 +10,6 @@ import {
   ArrowLeft,
   Edit,
   Trash2,
-  Star, // Changed Heart to Star for favorites
   Heart, // Kept for social Likes
   Droplet,
   Wind,

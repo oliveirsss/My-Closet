@@ -117,19 +117,15 @@ class AIReadyItem:
     def is_suitable_for_weather(self, weather_condition: str) -> bool:
         """
         Check if item is suitable for a weather condition.
-
-        Args:
-            weather_condition: Weather condition (sunny, rainy, snowy, etc)
-
-        Returns:
-            True if item has properties matching the condition
+        Outer layers should be weather resistant, base/mid layers are always suitable.
         """
-        if weather_condition.lower() == "rainy" and not self.waterproof:
-            return False
-        if weather_condition.lower() == "snowy" and not self.waterproof:
-            return False
-        if weather_condition.lower() == "windy" and not self.windproof:
-            return False
+        if self.layer == 3:
+            if weather_condition.lower() in ["rain", "rainy"] and not self.waterproof:
+                return False
+            if weather_condition.lower() == "snowy" and not self.waterproof:
+                return False
+            if weather_condition.lower() == "windy" and not self.windproof:
+                return False
         return True
 
 
@@ -553,35 +549,47 @@ class DataPreparationService:
         exclude_items: Optional[List[str]] = None,
     ) -> List[AIReadyItem]:
         """
-        Fetch wardrobe items and enrich with usage metrics.
-
-        Args:
-            user_id: User's ID
-            exclude_items: Item IDs to exclude
-
-        Returns:
-            List of AIReadyItem objects with enriched data
+        Fetch wardrobe items and enrich with usage metrics without blocking UI.
         """
-        try:
-            # Fetch all clean items from database
-            response = (
+        import asyncio
+
+        def fetch_db_data():
+            # Get clothes
+            clothes_resp = (
                 self.supabase.table("clothes")
                 .select("*")
                 .eq("user_id", user_id)
                 .eq("status", "clean")
                 .execute()
             )
+            # Get usage history
+            usage_resp = (
+                self.supabase.table("usage_history")
+                .select("worn_date, clothing_id")
+                .eq("user_id", user_id)
+                .execute()
+            )
+            return clothes_resp.data or [], usage_resp.data or []
 
-            items = response.data if response.data else []
+        try:
+            items, all_usage_records = await asyncio.to_thread(fetch_db_data)
 
             # Filter excluded items
             if exclude_items:
                 items = [item for item in items if item["id"] not in exclude_items]
 
-            # Enrich each item with usage metrics
+            # Group usage records by clothing_id
+            usage_by_item = {}
+            for record in all_usage_records:
+                cid = record.get("clothing_id")
+                if cid:
+                    usage_by_item.setdefault(cid, []).append(record)
+
+            # Enrich each item
             enriched_items = []
             for item in items:
-                usage_metrics = await self._compute_usage_metrics(user_id, item["id"])
+                item_records = usage_by_item.get(item["id"], [])
+                usage_metrics = self._compute_usage_from_records(item_records)
                 ai_ready_item = AIReadyItem(item, usage_metrics)
                 enriched_items.append(ai_ready_item)
 
@@ -591,88 +599,9 @@ class DataPreparationService:
             print(f"Error fetching wardrobe for user {user_id}: {e}")
             return []
 
-    async def _compute_usage_metrics(
-        self,
-        user_id: str,
-        item_id: str,
-    ) -> Dict[str, Any]:
-        """
-        Compute usage frequency metrics for an item.
-
-        Args:
-            user_id: User's ID
-            item_id: Item's ID
-
-        Returns:
-            Dictionary with usage metrics
-        """
-        try:
-            if not self.usage_service:
-                return {
-                    "usage_frequency_last_7_days": 0,
-                    "usage_frequency_last_30_days": 0,
-                    "last_used_days_ago": None,
-                    "total_wears": 0,
-                    "is_overused": False,
-                }
-
-            # Fetch usage history for this item
-            cutoff_7days = datetime.now() - timedelta(days=7)
-            cutoff_30days = datetime.now() - timedelta(days=30)
-
-            usage_response = (
-                self.supabase.table("usage_history")
-                .select("used_at")
-                .eq("user_id", user_id)
-                .eq("item_id", item_id)
-                .execute()
-            )
-
-            if not usage_response.data:
-                return {
-                    "usage_frequency_last_7_days": 0,
-                    "usage_frequency_last_30_days": 0,
-                    "last_used_days_ago": None,
-                    "total_wears": 0,
-                    "is_overused": False,
-                }
-
-            usage_records = usage_response.data
-
-            # Count usage in different time periods
-            usage_7days = sum(
-                1
-                for record in usage_records
-                if datetime.fromisoformat(record["used_at"]) > cutoff_7days
-            )
-            usage_30days = sum(
-                1
-                for record in usage_records
-                if datetime.fromisoformat(record["used_at"]) > cutoff_30days
-            )
-
-            # Get last used date
-            last_used = None
-            if usage_records:
-                last_used_record = max(
-                    usage_records, key=lambda r: datetime.fromisoformat(r["used_at"])
-                )
-                last_used_date = datetime.fromisoformat(last_used_record["used_at"])
-                last_used = (datetime.now() - last_used_date).days
-
-            # Determine if overused (more than once per day in last 7 days)
-            is_overused = usage_7days > 7
-
-            return {
-                "usage_frequency_last_7_days": usage_7days,
-                "usage_frequency_last_30_days": usage_30days,
-                "last_used_days_ago": last_used,
-                "total_wears": len(usage_records),
-                "is_overused": is_overused,
-            }
-
-        except Exception as e:
-            print(f"Error computing usage metrics for item {item_id}: {e}")
+    def _compute_usage_from_records(self, usage_records: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Compute usage frequency metrics from pre-fetched records."""
+        if not usage_records:
             return {
                 "usage_frequency_last_7_days": 0,
                 "usage_frequency_last_30_days": 0,
@@ -680,6 +609,42 @@ class DataPreparationService:
                 "total_wears": 0,
                 "is_overused": False,
             }
+
+        cutoff_7days = datetime.now() - timedelta(days=7)
+        cutoff_30days = datetime.now() - timedelta(days=30)
+
+        # Count usage in different time periods
+        usage_7days = 0
+        usage_30days = 0
+        
+        valid_records = []
+        for r in usage_records:
+            try:
+                dt = datetime.fromisoformat(r["worn_date"])
+                valid_records.append(dt)
+                if dt > cutoff_7days:
+                    usage_7days += 1
+                if dt > cutoff_30days:
+                    usage_30days += 1
+            except Exception:
+                pass
+
+        # Get last used date
+        last_used_days_ago = None
+        if valid_records:
+            last_used = max(valid_records)
+            last_used_days_ago = (datetime.now() - last_used).days
+
+        total_wears = len(valid_records)
+        is_overused = usage_7days >= 3 or usage_30days >= 10
+
+        return {
+            "usage_frequency_last_7_days": usage_7days,
+            "usage_frequency_last_30_days": usage_30days,
+            "last_used_days_ago": last_used_days_ago,
+            "total_wears": total_wears,
+            "is_overused": is_overused,
+        }
 
     def _filter_wardrobe_for_daily(
         self,
@@ -690,23 +655,6 @@ class DataPreparationService:
     ) -> List[AIReadyItem]:
         """
         Filter wardrobe items for daily recommendation context.
-
-        Filtering logic:
-        - Only clean items (already enforced by fetch)
-        - Only items suitable for temperature
-        - Only items suitable for weather condition
-        - Prioritize favorites
-        - Avoid overused items if alternatives exist
-        - Keep reasonable variety
-
-        Args:
-            items: All available items
-            temperature: Current temperature
-            weather_condition: Weather condition
-            user_preferences: Optional user preferences
-
-        Returns:
-            Filtered and prioritized list of items
         """
         filtered = []
 
@@ -720,6 +668,34 @@ class DataPreparationService:
                 continue
 
             filtered.append(item)
+
+        # RESCUE LOGIC: User requires that bottoms and shoes are always provided even if not ideal for weather.
+        def is_bottom(i):
+            t = (i.type or "").lower()
+            n = (i.name or "").lower()
+            keys = ["calça", "calca", "jeans", "short", "pant", "trouser", "denim"]
+            return any(k in t for k in keys) or any(k in n for k in keys)
+            
+        def is_shoe(i):
+            t = (i.type or "").lower()
+            n = (i.name or "").lower()
+            keys = ["sapato", "sapatilha", "ténis", "tenis", "bota", "shoe", "sneaker", "calçado"]
+            return any(k in t for k in keys) or any(k in n for k in keys)
+
+        has_bottoms = any(is_bottom(i) for i in filtered)
+        if not has_bottoms:
+            all_bottoms = [i for i in items if is_bottom(i)]
+            if all_bottoms:
+                # Add the one closest to current temperature as fallback
+                best_bottom = min(all_bottoms, key=lambda i: abs(((i.temp_min + i.temp_max)/2) - temperature))
+                filtered.append(best_bottom)
+                
+        has_shoes = any(is_shoe(i) for i in filtered)
+        if not has_shoes:
+            all_shoes = [i for i in items if is_shoe(i)]
+            if all_shoes:
+                best_shoe = min(all_shoes, key=lambda i: abs(((i.temp_min + i.temp_max)/2) - temperature))
+                filtered.append(best_shoe)
 
         # Sort by priority: favorites first, then by usage (prefer less used)
         def priority_key(item):

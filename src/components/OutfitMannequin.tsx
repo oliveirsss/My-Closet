@@ -9,6 +9,7 @@ interface OutfitMannequinProps {
   insulationLayer: LayerRecommendation;
   outerLayer: LayerRecommendation;
   onViewItem?: (item: ClothingItem) => void;
+  hideDetails?: boolean;
 }
 
 export function OutfitMannequin({
@@ -16,6 +17,7 @@ export function OutfitMannequin({
   insulationLayer,
   outerLayer,
   onViewItem,
+  hideDetails = false,
 }: OutfitMannequinProps) {
   const [selectedItem, setSelectedItem] = useState<ClothingItem | null>(null);
 
@@ -23,30 +25,33 @@ export function OutfitMannequin({
   const getAccessories = () =>
     outerLayer.items.filter((item) => item.category === "accessories");
   // Helper to identify bottoms (robust check)
-  const isBottom = (type: string) => {
-    const t = type.toLowerCase();
+  const isBottom = (item: any) => {
+    const t = ((item.type || '') + ' ' + (item.name || '')).toLowerCase();
     return (
       t.includes("calça") ||
       t.includes("calca") ||
       t.includes("short") ||
       t.includes("jeans") ||
-      t.includes("trousers")
+      t.includes("trousers") ||
+      t.includes("pant") ||
+      t.includes("skirt") ||
+      t.includes("saia")
     );
   };
 
   const getTops = () => [
-    ...baseLayer.items.filter((item) => !isBottom(item.item.type)),
-    ...insulationLayer.items.filter((item) => !isBottom(item.item.type)),
+    ...baseLayer.items.filter((item) => !isBottom(item.item)),
+    ...insulationLayer.items.filter((item) => !isBottom(item.item)),
     ...outerLayer.items.filter(
       (item) =>
         item.category === "jacket" ||
-        (!item.category && !isBottom(item.item.type)),
+        (!item.category && !isBottom(item.item)),
     ),
   ];
 
   const getBottoms = () => [
-    ...baseLayer.items.filter((item) => isBottom(item.item.type)),
-    ...insulationLayer.items.filter((item) => isBottom(item.item.type)),
+    ...baseLayer.items.filter((item) => isBottom(item.item)),
+    ...insulationLayer.items.filter((item) => isBottom(item.item)),
   ];
 
   const getShoes = () =>
@@ -259,6 +264,7 @@ export function OutfitMannequin({
       </Card>
 
       {/* Layer Details Cards */}
+      {!hideDetails && (
       <div className="w-full grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Layer 1 - Base */}
         <Card className="p-4 border-emerald-200 bg-emerald-50/50">
@@ -415,6 +421,7 @@ export function OutfitMannequin({
           )}
         </Card>
       </div>
+      )}
 
       {/* Item Details Modal */}
       {selectedItem && (

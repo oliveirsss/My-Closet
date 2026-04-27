@@ -160,3 +160,37 @@ export async function removeFromWishlist(itemId: string) {
 export async function getWishlist(): Promise<{ items: any[] }> {
   return fetchAPI("/social/wishlist");
 }
+
+/* --- AI OUTFIT --- */
+export async function getAIDailyOutfit(weather_data: any, preferences?: any, exclude_items?: any[]) {
+  return fetchAPI("/ai-outfit/today", {
+    method: "POST",
+    body: JSON.stringify({ weather_data, preferences: preferences || {}, exclude_items: exclude_items || [] }),
+  });
+}
+
+export async function getAITravelOutfits(payload: {
+  destination: string,
+  start_date: string,
+  end_date: string,
+  luggage_limit?: number,
+  preferences?: any,
+  exclude_items?: string[]
+}) {
+  return fetchAPI("/ai-outfit/travel", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+/* --- USAGE HISTORY --- */
+export async function recordOutfitUsage(itemIds: string[], occasion?: string): Promise<{ success: boolean; recorded: number }> {
+  return fetchAPI("/usage/record", {
+    method: "POST",
+    body: JSON.stringify({ item_ids: itemIds, occasion: occasion || null }),
+  });
+}
+
+export async function getWearHistory(days: number = 30): Promise<{ success: boolean; history: Array<{ date: string; items: any[] }> }> {
+  return fetchAPI(`/usage/history?days=${days}`);
+}

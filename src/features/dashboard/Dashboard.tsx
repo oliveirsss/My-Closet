@@ -10,6 +10,8 @@ import { EditProfileDialog } from "../auth/EditProfileDialog";
 import { TravelPlannerDialog } from "./TravelPlannerDialog";
 // Componente Mannequin para Visualização
 import { OutfitMannequin } from "../../components/OutfitMannequin";
+// Chat Dialog 
+import { AIChatDialog } from "./AIChatDialog";
 
 // Ícones
 import {
@@ -32,15 +34,15 @@ import {
   RefreshCw,
   Crown,
   Sparkles,
+  MessageCircle,
+  CalendarDays,
+  PartyPopper,
 } from "lucide-react";
 // API
 import { supabase } from "../../lib/supabase";
 import * as api from "../../services/api";
 // Outfit Recommendation Service
-import {
-  recommendOutfit,
-  WeatherData,
-} from "../../services/outfitRecommendation";
+import { WeatherData } from "../../services/outfitRecommendation";
 
 // --- CONFIGURAÇÃO DA API ---
 const API_KEY = import.meta.env.VITE_OPENWEATHER_API_KEY || "";
@@ -51,6 +53,8 @@ interface DashboardProps {
   onNavigate: (screen: Screen) => void;
   onLogout: () => void;
   onViewItem: (item: ClothingItem) => void;
+  aiOutfitItems: ClothingItem[] | null;
+  setAiOutfitItems: (items: ClothingItem[] | null) => void;
 }
 
 // tipo local para o perfil no dashboard
@@ -67,6 +71,8 @@ export function Dashboard({
   onNavigate,
   onLogout,
   onViewItem,
+  aiOutfitItems,
+  setAiOutfitItems,
 }: DashboardProps) {
   // 1. ESTADOS (Profile, Travel, Weather)
   const [userProfile, setUserProfile] = useState<UserProfileState>({
@@ -92,7 +98,17 @@ export function Dashboard({
     loading: true,
   });
 
-  const [outfitVariant, setOutfitVariant] = useState(0);
+  const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+
+  const [isAIChatOpen, setIsAIChatOpen] = useState(false);
+
+  // Wear confirmation feedback
+  const [wearConfirmed, setWearConfirmed] = useState(false);
+  const [wearLoading, setWearLoading] = useState(false);
+
+  // Wear history (loaded on demand)
+  const [wearHistory, setWearHistory] = useState<Array<{ date: string; items: any[] }> | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // 2. Carregar Perfil (Direto do Supabase para ser mais robusto)
   // 2. Carregar Perfil (Via API para consistência com o backend)
@@ -158,65 +174,82 @@ export function Dashboard({
 
   // 4. Carregar Tempo (Sempre que Location mudar)
   useEffect(() => {
+    // Se o utilizador tiver uma localização explícita no perfil, usamos essa
+    if (userProfile.location && userProfile.location.trim() !== "") {
+      fetchWeatherByCity(userProfile.location);
+      return;
+    }
+
+    // Senão tentamos o GPS
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         async (position) => {
           const { latitude, longitude } = position.coords;
-          fetchWeather(latitude, longitude);
+          fetchWeatherByCoords(latitude, longitude);
         },
         (error) => {
           console.error("Erro de localização:", error);
-          fetchWeather(38.7169, -9.1399); // Fallback Lisboa
+          fetchWeatherByCoords(38.7169, -9.1399); // Fallback Lisboa
         },
       );
     } else {
-      fetchWeather(38.7169, -9.1399);
+      fetchWeatherByCoords(38.7169, -9.1399);
     }
-  }, []);
+  }, [userProfile.location]);
 
-  const fetchWeather = async (lat: number, lon: number) => {
+  const processWeatherResponse = async (res: Response, fallbackCity?: string) => {
+    if (!res.ok) throw new Error("Weather API failed");
+    const data = await res.json();
+
+    const code = data.weather[0].id;
+    let condition = "cloudy";
+    let isRaining = false;
+
+    if (code === 800) condition = "sunny";
+    else if (code >= 200 && code <= 531) {
+      condition = "rainy";
+      isRaining = true;
+    }
+
+    setWeather({
+      temp: Math.round(data.main.temp),
+      humidity: data.main.humidity,
+      condition,
+      rain: isRaining,
+      windSpeed: data.wind?.speed || 0, // Wind speed in m/s
+      city: data.name || fallbackCity || "Desconhecido",
+      loading: false,
+    });
+  };
+
+  const fetchWeatherByCoords = async (lat: number, lon: number) => {
     if (!API_KEY) {
-      setWeather((prev) => ({
-        ...prev,
-        temp: 18,
-        windSpeed: 0,
-        city: "Modo Demo",
-        loading: false,
-      }));
+      setWeather((prev) => ({ ...prev, temp: 18, windSpeed: 0, city: "Modo Demo", loading: false }));
       return;
     }
-
     try {
-      const res = await fetch(
-        `${API_URL}?lat=${lat}&lon=${lon}&units=metric&appid=${API_KEY}&lang=pt`,
-      );
-      const data = await res.json();
-
-      const code = data.weather[0].id;
-      let condition = "cloudy";
-      let isRaining = false;
-
-      if (code === 800) condition = "sunny";
-      else if (code >= 200 && code <= 531) {
-        condition = "rainy";
-        isRaining = true;
-      }
-
-      setWeather({
-        temp: Math.round(data.main.temp),
-        humidity: data.main.humidity,
-        condition,
-        rain: isRaining,
-        windSpeed: data.wind?.speed || 0, // Wind speed in m/s
-        city: data.name,
-        loading: false,
-      });
+      const res = await fetch(`${API_URL}?lat=${lat}&lon=${lon}&units=metric&appid=${API_KEY}&lang=pt`);
+      await processWeatherResponse(res);
     } catch (error) {
       setWeather((prev) => ({ ...prev, loading: false, city: "Erro API" }));
     }
   };
 
-  // 4. Generate Outfit Recommendation using the recommendation service
+  const fetchWeatherByCity = async (city: string) => {
+    if (!API_KEY) {
+      setWeather((prev) => ({ ...prev, temp: 18, windSpeed: 0, city: city, loading: false }));
+      return;
+    }
+    try {
+      const res = await fetch(`${API_URL}?q=${encodeURIComponent(city)}&units=metric&appid=${API_KEY}&lang=pt`);
+      await processWeatherResponse(res, city);
+    } catch (error) {
+      console.error("Erro ao procurar tempo por cidade, fallback para GPS:", error);
+      // Fallback para as coordenadas
+      fetchWeatherByCoords(38.7169, -9.1399);
+    }
+  };
+
   const weatherData: WeatherData = {
     temperature: weather.temp,
     rain: weather.rain,
@@ -224,9 +257,131 @@ export function Dashboard({
     humidity: weather.humidity,
   };
 
+  // Auto-fetch AI suggestion
+  useEffect(() => {
+    if (!aiOutfitItems && !weather.loading && items.length > 0 && !isGeneratingAi) {
+      setIsGeneratingAi(true);
+      api.getAIDailyOutfit({
+        temp: weather.temp,
+        condition: weather.condition,
+        humidity: weather.humidity,
+        wind_speed: weather.windSpeed,
+      })
+        .then((res) => {
+          if (res.success && res.primary_outfit) {
+            setAiOutfitItems(res.primary_outfit.items);
+          }
+        })
+        .catch((err) => {
+          console.error("Erro a gerar AI outfit:", err);
+        })
+        .finally(() => {
+          setIsGeneratingAi(false);
+        });
+    }
+  }, [weather.loading, items.length, aiOutfitItems]);
 
+  // Helper to convert flat AI items to LayerRecommendation format
+  const buildLayerFromAiItems = (aiItems: ClothingItem[]): { baseLayer: any; insulationLayer: any; outerLayer: any } => {
+    const isBottom = (item: ClothingItem) => {
+      const s = (item.name + ' ' + (item.type || '')).toLowerCase();
+      return s.includes('calça') || s.includes('calca') || s.includes('short') || s.includes('jeans') || s.includes('trousers') || s.includes('pant') || s.includes('skirt') || s.includes('saia');
+    };
+    const isShoe = (item: ClothingItem) => {
+      const s = (item.name + ' ' + (item.type || '')).toLowerCase();
+      return s.includes('sapato') || s.includes('sapatilha') || s.includes('ténis') || s.includes('tenis') || s.includes('sneaker') || s.includes('bota') || s.includes('calçado') || s.includes('shoe') || s.includes('jordan') || s.includes('dunk') || s.includes('af1');
+    };
 
-  const outfitRecommendation = recommendOutfit(items, weatherData, outfitVariant);
+    const baseItems: ItemRecommendation[] = [];
+    const insulationItems: ItemRecommendation[] = [];
+    const outerItems: ItemRecommendation[] = [];
+
+    let hasBottom = false;
+    let hasShoe = false;
+
+    aiItems.forEach(item => {
+      const layer = item.layer || 1;
+      
+      if (layer === 3) {
+        // Camada 3: Proteção Externa (Casacos, sapatilhas, acessórios)
+        const category = isShoe(item) ? 'shoes' : 'jacket';
+        outerItems.push({ item, reasoning: '', category });
+        if (category === 'shoes') hasShoe = true;
+      } else if (layer === 2 || isBottom(item)) {
+        // Camada 2: Intermédia (Camisolas quentes, calças de inverno, etc)
+        // OBS: Calças/Calções são sempre Camada 2 para apresentar na coluna certa.
+        insulationItems.push({ item, reasoning: '' });
+        if (isBottom(item)) hasBottom = true;
+      } else {
+        // Camada 1: Base (T-shirts, tops, calções leves, etc)
+        baseItems.push({ item, reasoning: '' });
+        if (isBottom(item)) hasBottom = true; // Just in case
+      }
+    });
+
+    // Rescue real items from wardrobe if missing
+    if (!hasBottom) {
+      const real = items.find(i => i.status === 'clean' && isBottom(i));
+      if (real) insulationItems.push({ item: real, reasoning: 'Adicionado automaticamente' });
+    }
+    if (!hasShoe) {
+      const real = items.find(i => i.status === 'clean' && isShoe(i));
+      if (real) outerItems.push({ item: real, reasoning: 'Adicionado automaticamente', category: 'shoes' });
+    }
+
+    return {
+      baseLayer: { items: baseItems, reasoning: '', isMissing: baseItems.length === 0 },
+      insulationLayer: { items: insulationItems, reasoning: '', isMissing: insulationItems.length === 0 },
+      outerLayer: { items: outerItems, reasoning: '', isMissing: outerItems.length === 0 },
+    };
+  };
+
+  const currentOutfit = aiOutfitItems
+    ? buildLayerFromAiItems(aiOutfitItems)
+    : {
+        baseLayer: { items: [], reasoning: '', isMissing: true },
+        insulationLayer: { items: [], reasoning: '', isMissing: true },
+        outerLayer: { items: [], reasoning: '', isMissing: true },
+      };
+
+  // All item ids in the current outfit (for wear confirmation)
+  const currentOutfitItemIds = aiOutfitItems
+    ? aiOutfitItems.map(i => i.id).filter(Boolean)
+    : [];
+
+  const handleWearConfirm = async () => {
+    if (wearLoading || wearConfirmed) return;
+    setWearLoading(true);
+    try {
+      await api.recordOutfitUsage(currentOutfitItemIds);
+      setWearConfirmed(true);
+      // Refresh history if visible
+      if (wearHistory !== null) loadHistory();
+    } catch (e) {
+      console.error('Erro ao registar uso:', e);
+    } finally {
+      setWearLoading(false);
+    }
+  };
+
+  const loadHistory = async () => {
+    setHistoryLoading(true);
+    try {
+      const res = await api.getWearHistory(30);
+      setWearHistory(res.history || []);
+    } catch (e) {
+      console.error('Erro ao carregar histórico:', e);
+      setWearHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const handleAcceptAiOutfit = (outfitItems: ClothingItem[]) => {
+    setAiOutfitItems(outfitItems);
+    setWearConfirmed(false);
+  };
+
   const cleanItems = items.filter((item) => item.status === "clean").length;
   const dirtyItems = items.filter((item) => item.status === "dirty").length;
   const missingLayers = [1, 2, 3].filter(
@@ -313,6 +468,13 @@ export function Dashboard({
             <Button variant="outline" onClick={() => setIsTravelOpen(true)}>
               <Plane className="mr-2 h-4 w-4" /> Viagem
             </Button>
+            
+            <Button 
+              className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+              onClick={() => setIsAIChatOpen(true)}
+            >
+              <MessageCircle className="mr-2 h-4 w-4" /> AI Style Chat
+            </Button>
 
             <Button variant="ghost" onClick={onLogout}>
               <LogOut className="h-4 w-4" />
@@ -378,30 +540,106 @@ export function Dashboard({
 
         {/* Sugestão do Dia */}
         <section>
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
             <h2 className="text-2xl font-semibold text-emerald-900 flex items-center gap-2">
               <span className="bg-emerald-100 p-1.5 rounded-md">
                 <TrendingUp className="h-5 w-5 text-emerald-700" />
               </span>
               Sugestão do Dia
             </h2>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setOutfitVariant(prev => prev + 1)}
-              className="text-emerald-700 border-emerald-200 hover:bg-emerald-50"
-            >
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Nova Sugestão
-            </Button>
+            <div className="flex gap-2 flex-wrap">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isGeneratingAi}
+                onClick={() => { setAiOutfitItems(null); setWearConfirmed(false); }}
+                className="text-stone-600 border-stone-200 hover:bg-stone-50"
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${isGeneratingAi ? 'animate-spin' : ''}`} />
+                Mudar (AI)
+              </Button>
+            </div>
           </div>
 
-          <OutfitMannequin
-            baseLayer={outfitRecommendation.baseLayer}
-            insulationLayer={outfitRecommendation.insulationLayer}
-            outerLayer={outfitRecommendation.outerLayer}
-            onViewItem={onViewItem}
-          />
+          {isGeneratingAi || !aiOutfitItems ? (
+            <div className="flex flex-col items-center justify-center p-12 bg-white rounded-xl border border-stone-200 shadow-sm min-h-[400px]">
+              <Sparkles className="h-10 w-10 text-emerald-500 mb-4 animate-pulse" />
+              <p className="text-lg font-medium text-stone-700">A gerar sugestão inteligente...</p>
+              <p className="text-sm text-stone-500 mt-2 text-center max-w-sm">
+                A analisar o seu inventário, o estado do tempo atual, e princípios de styling para encontrar a correspondência perfeita.
+                <br /><br />
+                <span className="text-xs opacity-70 bg-stone-100 px-2 py-1 rounded-md">Pode demorar até 60 segundos</span>
+              </p>
+            </div>
+          ) : (
+            <OutfitMannequin
+              baseLayer={currentOutfit.baseLayer}
+              insulationLayer={currentOutfit.insulationLayer}
+              outerLayer={currentOutfit.outerLayer}
+              onViewItem={onViewItem}
+            />
+          )}
+
+          {/* Botão de confirmação de uso */}
+          <div className="mt-4 flex flex-col sm:flex-row items-center gap-3">
+            <button
+              onClick={handleWearConfirm}
+              disabled={wearLoading || wearConfirmed}
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all shadow-sm ${
+                wearConfirmed
+                  ? 'bg-emerald-100 text-emerald-700 border border-emerald-200 cursor-default'
+                  : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20 active:scale-95'
+              }`}
+            >
+              {wearConfirmed ? (
+                <><PartyPopper className="w-4 h-4" /> Outfit registado para hoje!</>
+              ) : wearLoading ? (
+                <><RefreshCw className="w-4 h-4 animate-spin" /> A registar...</>
+              ) : (
+                <><CheckCircle className="w-4 h-4" /> Usei este outfit hoje!</>
+              )}
+            </button>
+
+            <button
+              onClick={() => wearHistory === null ? loadHistory() : setWearHistory(null)}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-stone-600 border border-stone-200 hover:bg-stone-50 transition-all"
+            >
+              <CalendarDays className="w-4 h-4" />
+              {wearHistory !== null ? 'Fechar histórico' : 'Ver histórico'}
+            </button>
+          </div>
+
+          {/* Mini histórico */}
+          {wearHistory !== null && (
+            <div className="mt-4 rounded-xl border border-stone-200 bg-white overflow-hidden">
+              <div className="px-4 py-3 bg-stone-50 border-b border-stone-200 flex items-center gap-2">
+                <CalendarDays className="w-4 h-4 text-stone-500" />
+                <span className="text-sm font-semibold text-stone-700">O que usei nos últimos 30 dias</span>
+              </div>
+              {historyLoading ? (
+                <div className="p-6 text-center text-stone-400 text-sm">A carregar...</div>
+              ) : wearHistory.length === 0 ? (
+                <div className="p-6 text-center text-stone-400 text-sm">Ainda não há registos. Clica em "Usei este outfit hoje!" para começar.</div>
+              ) : (
+                <div className="divide-y divide-stone-100 max-h-72 overflow-y-auto">
+                  {wearHistory.map(entry => (
+                    <div key={entry.date} className="px-4 py-3 flex items-start gap-4">
+                      <span className="text-xs font-semibold text-stone-500 min-w-[4.5rem] pt-0.5">
+                        {new Date(entry.date + 'T12:00:00').toLocaleDateString('pt-PT', { weekday: 'short', day: 'numeric', month: 'short' })}
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {entry.items.map((item, idx) => (
+                          <span key={idx} className="inline-flex items-center gap-1 text-xs bg-emerald-50 text-emerald-800 border border-emerald-100 px-2 py-1 rounded-full">
+                            {item.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         {/* Resumo Inventário */}
@@ -439,6 +677,15 @@ export function Dashboard({
         open={isTravelOpen}
         onOpenChange={setIsTravelOpen}
         items={items}
+      />
+
+      <AIChatDialog
+        open={isAIChatOpen}
+        onOpenChange={setIsAIChatOpen}
+        weather={weather}
+        items={items}
+        onViewItem={onViewItem}
+        onAcceptOutfit={handleAcceptAiOutfit}
       />
     </div>
   );

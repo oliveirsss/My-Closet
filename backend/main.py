@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import ai_outfit, auth, items, social, storage  # Import all routers
+from routers import ai_outfit, auth, items, social, storage, usage  # Import all routers
 
 app = FastAPI()
 
@@ -19,6 +19,7 @@ app.include_router(items.router)
 app.include_router(storage.router)
 app.include_router(social.router)
 app.include_router(ai_outfit.router)
+app.include_router(usage.router)
 
 
 @app.get("/health")

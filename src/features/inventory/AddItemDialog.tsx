@@ -47,7 +47,7 @@ export function AddItemDialog({ open, onOpenChange, onAdd, onUpdate, itemToEdit 
     if (open) {
       if (itemToEdit) {
         setName(itemToEdit.name); setBrand(itemToEdit.brand); setSize(itemToEdit.size);
-        setType(itemToEdit.type); setLayer(itemToEdit.layer); setMaterials(itemToEdit.materials);
+        setType(itemToEdit.type); setLayer(itemToEdit.layer as 1 | 2 | 3); setMaterials(itemToEdit.materials);
         setWeight(itemToEdit.weight.toString()); setTempRange([itemToEdit.tempMin, itemToEdit.tempMax]);
         setWaterproof(itemToEdit.waterproof); setWindproof(itemToEdit.windproof); setSeasons(itemToEdit.seasons);
         setImagePreview(itemToEdit.image);
@@ -188,9 +188,9 @@ export function AddItemDialog({ open, onOpenChange, onAdd, onUpdate, itemToEdit 
 
           {step === 2 && (
             <div className="space-y-6">
-              <h3 className="text-emerald-900 font-medium text-lg">Step 2: Classificação</h3>
-              <div><Label>Tipo *</Label><div className="grid grid-cols-4 gap-2 mt-2">{clothingTypes.map(t => <Button key={t} variant={type === t ? 'default' : 'outline'} onClick={() => setType(t)} className={type === t ? 'bg-emerald-700' : ''}>{t}</Button>)}</div></div>
-              <div><Label>Camada *</Label><div className="grid grid-cols-3 gap-2 mt-2">{[1, 2, 3].map(l => <Button key={l} variant={layer === l ? 'default' : 'outline'} onClick={() => setLayer(l as 1 | 2 | 3)} className={layer === l ? 'bg-emerald-700' : ''}>Camada {l}</Button>)}</div></div>
+              <h3 className="text-emerald-900 font-medium text-lg">Passo 2: Classificação</h3>
+              <div><Label>Tipo *</Label><div className="grid grid-cols-4 gap-2 mt-2">{clothingTypes.map(t => <Button key={t} variant={type === t ? 'default' : 'outline'} onClick={() => setType(t)} className={type === t ? 'bg-emerald-700 text-white hover:bg-emerald-800' : ''}>{t}</Button>)}</div></div>
+              <div><Label>Camada *</Label><div className="grid grid-cols-3 gap-2 mt-2">{[1, 2, 3].map(l => <Button key={l} variant={layer === l ? 'default' : 'outline'} onClick={() => setLayer(l as 1 | 2 | 3)} className={layer === l ? 'bg-emerald-700 text-white hover:bg-emerald-800' : ''}>Camada {l}</Button>)}</div></div>
               <div><Label>Materiais *</Label><div className="flex gap-2 mt-2"><Input value={materialInput} onChange={(e) => setMaterialInput(e.target.value)} placeholder="Ex: Algodão" onKeyDown={(e) => e.key === 'Enter' && addMaterial()} /><Button onClick={addMaterial} type="button">Adicionar</Button></div><div className="flex gap-2 flex-wrap mt-2">{materials.map(m => <Badge key={m} variant="secondary" onClick={() => removeMaterial(m)} className="cursor-pointer">{m} ×</Badge>)}</div></div>
               <div><Label>Peso (g) *</Label><Input type="number" value={weight} onChange={(e) => setWeight(e.target.value)} className="mt-1" /></div>
             </div>
@@ -198,10 +198,10 @@ export function AddItemDialog({ open, onOpenChange, onAdd, onUpdate, itemToEdit 
 
           {step === 3 && (
             <div className="space-y-6">
-              <h3 className="text-emerald-900 font-medium">Step 3: Condições</h3>
+              <h3 className="text-emerald-900 font-medium">Passo 3: Condições</h3>
               <div><Label>Temp: {tempRange[0]}°C - {tempRange[1]}°C</Label><Slider min={-20} max={40} step={1} value={tempRange} onValueChange={setTempRange} className="mt-4" /></div>
               <div className="flex gap-4 mt-2"><label className="flex gap-2"><input type="checkbox" checked={waterproof} onChange={(e) => setWaterproof(e.target.checked)} /> Impermeável</label><label className="flex gap-2"><input type="checkbox" checked={windproof} onChange={(e) => setWindproof(e.target.checked)} /> Corta-vento</label></div>
-              <div><Label>Estações *</Label><div className="grid grid-cols-2 gap-2 mt-2">{allSeasons.map(s => <Button key={s} variant={seasons.includes(s) ? 'default' : 'outline'} onClick={() => toggleSeason(s)} className={seasons.includes(s) ? 'bg-emerald-700' : ''}>{s}</Button>)}</div></div>
+              <div><Label>Estações *</Label><div className="grid grid-cols-2 gap-2 mt-2">{allSeasons.map(s => <Button key={s} variant={seasons.includes(s) ? 'default' : 'outline'} onClick={() => toggleSeason(s)} className={seasons.includes(s) ? 'bg-emerald-700 text-white hover:bg-emerald-800' : ''}>{s}</Button>)}</div></div>
             </div>
           )}
         </div>

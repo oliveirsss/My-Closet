@@ -18,7 +18,6 @@ import {
   LogOut,
   Home,
   Camera,
-  TrendingUp,
   Zap,
   User,
   X,
@@ -97,15 +96,23 @@ export function Inventory({
   const [showDirtyOnly, setShowDirtyOnly] = useState(false);
   const [brandFilter, setBrandFilter] = useState<string>("all");
   const [sizeFilter, setSizeFilter] = useState<string>("all");
+  const [layerFilter, setLayerFilter] = useState<string>("all");
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
 
   // Resetar a paginação ao mudar filtros
   useEffect(() => {
     setVisibleCount(8);
-  }, [searchQuery, filterType, ownerFilter, brandFilter, sizeFilter]);
+  }, [searchQuery, filterType, ownerFilter, brandFilter, sizeFilter, layerFilter, categoryFilter]);
 
   // Derived Data for Filters
   const uniqueBrands = Array.from(new Set(items.map(i => i.brand).filter(Boolean))).sort();
   const uniqueSizes = Array.from(new Set(items.map(i => i.size).filter(Boolean))).sort();
+
+  // Calculate unique categories with grouping for Pants/Shorts
+  const uniqueCategories = Array.from(new Set(items.map(i => {
+    if (i.type === "Calças" || i.type === "Calções") return "Calças/Calções";
+    return i.type;
+  }).filter(Boolean))).sort();
 
   // Community Spotlight Logic (Find user with most items)
   // RUNS IF: user matches 'visitor' OR (client AND viewing community)
@@ -138,9 +145,24 @@ export function Inventory({
       !item.name.toLowerCase().includes(searchQuery.toLowerCase())
     )
       return false;
+    // Note: filterType (legacy) might overlap with categoryFilter. keeping it distinct for now if used elsewhere? 
+    // Actually filterType seems unused in UI currently based on previous code view, but kept for safety.
     if (filterType && item.type !== filterType) return false;
     if (brandFilter !== "all" && item.brand !== brandFilter) return false;
     if (sizeFilter !== "all" && item.size !== sizeFilter) return false;
+
+    // Layer Filter
+    if (layerFilter !== "all" && item.layer !== parseInt(layerFilter)) return false;
+
+    // Category Filter
+    if (categoryFilter !== "all") {
+      if (categoryFilter === "Calças/Calções") {
+        if (item.type !== "Calças" && item.type !== "Calções") return false;
+      } else {
+        if (item.type !== categoryFilter) return false;
+      }
+    }
+
     return true;
   });
 
@@ -345,6 +367,32 @@ export function Inventory({
           </div>
 
           <div className="flex gap-2">
+            {/* FILTER: CAMADA */}
+            <Select value={layerFilter} onValueChange={setLayerFilter}>
+              <SelectTrigger className="w-[110px] bg-white">
+                <SelectValue placeholder="Camada" />
+              </SelectTrigger>
+              <SelectContent className="bg-white">
+                <SelectItem value="all">Camadas</SelectItem>
+                <SelectItem value="1">Camada 1</SelectItem>
+                <SelectItem value="2">Camada 2</SelectItem>
+                <SelectItem value="3">Camada 3</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {/* FILTER: CATEGORIA */}
+            <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+              <SelectTrigger className="w-[130px] bg-white">
+                <SelectValue placeholder="Categoria" />
+              </SelectTrigger>
+              <SelectContent className="bg-white">
+                <SelectItem value="all">Categorias</SelectItem>
+                {uniqueCategories.map(cat => (
+                  <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
             <Select value={brandFilter} onValueChange={setBrandFilter}>
               <SelectTrigger className="w-[140px] bg-white">
                 <SelectValue placeholder="Marca" />
@@ -409,12 +457,10 @@ export function Inventory({
                       isFavorite={viewMode === 'community' ? !!item.isLikedByMe : item.favorite}
                       onToggle={(item) => {
                         if (userType === 'visitor') {
-                          toast.error("Faz login ou cria conta para dar Like! ❤️", {
+                          toast.error("Inicie sessão ou crie conta para marcar como favorito!", {
                             action: {
                               label: "Login",
-                              onClick: () => window.location.reload() // Or navigate to login? App handles login via state.
-                              // Actually, I can't easily navigate to login from here without callback.
-                              // Simple toast is enough for now.
+                              onClick: () => window.location.reload()
                             }
                           });
                           return;

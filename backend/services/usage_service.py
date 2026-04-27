@@ -42,12 +42,12 @@ class UsageService:
                 self.supabase.table("usage_history")
                 .select("id")
                 .eq("user_id", user_id)
-                .eq("item_id", item_id)
+                .eq("clothing_id", item_id)
             )
 
             if days:
                 cutoff_date = (datetime.now() - timedelta(days=days or 30)).isoformat()
-                query = query.gte("used_at", cutoff_date)
+                query = query.gte("worn_date", cutoff_date)
 
             response = query.execute()
             return len(response.data) if response.data else 0
@@ -94,16 +94,16 @@ class UsageService:
                 cutoff_date = (datetime.now() - timedelta(days=days or 30)).isoformat()
                 usage_response = (
                     self.supabase.table("usage_history")
-                    .select("item_id")
+                    .select("clothing_id")
                     .eq("user_id", user_id)
-                    .gte("used_at", cutoff_date)
+                    .gte("worn_date", cutoff_date)
                     .execute()
                 )
 
                 # Count usage per item
                 usage_counts = {}
                 for usage in usage_response.data if usage_response.data else []:
-                    item_id = usage["item_id"]
+                    item_id = usage["clothing_id"]
                     usage_counts[item_id] = usage_counts.get(item_id, 0) + 1
 
                 # Normalize scores
@@ -151,9 +151,9 @@ class UsageService:
                     self.supabase.table("usage_history").insert(
                         {
                             "user_id": user_id,
-                            "item_id": item_id,
-                            "used_at": timestamp,
-                            "occasion": occasion,
+                            "clothing_id": item_id,
+                            "worn_date": timestamp,
+                            "weather_condition": occasion,
                         }
                     ).execute()
                 except Exception as e:
@@ -273,14 +273,14 @@ class UsageService:
                 cutoff_date = (datetime.now() - timedelta(days=days or 30)).isoformat()
                 used_recently = (
                     self.supabase.table("usage_history")
-                    .select("item_id")
+                    .select("clothing_id")
                     .eq("user_id", user_id)
-                    .gte("used_at", cutoff_date)
+                    .gte("worn_date", cutoff_date)
                     .execute()
                 )
 
                 used_item_ids = (
-                    set(usage["item_id"] for usage in used_recently.data)
+                    set(usage["clothing_id"] for usage in used_recently.data)
                     if used_recently.data
                     else set()
                 )

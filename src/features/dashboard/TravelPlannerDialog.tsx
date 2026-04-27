@@ -6,7 +6,8 @@ import { Card } from '../../components/ui/card';
 import { ClothingItem } from '../../types';
 import { Plane, MapPin, Luggage, Calendar as CalendarIcon, CloudRain, Sun, Wind } from 'lucide-react';
 import { Badge } from '../../components/ui/badge';
-import { recommendOutfit, WeatherData } from '../../services/outfitRecommendation';
+import * as api from '../../services/api';
+import { Sparkles, RefreshCw } from 'lucide-react';
 
 const API_KEY = import.meta.env.VITE_OPENWEATHER_API_KEY || '';
 
@@ -74,138 +75,62 @@ export function TravelPlannerDialog({ open, onOpenChange, items }: TravelPlanner
       setError('Por favor, insira o nome de uma cidade.');
       return;
     }
-    if (!API_KEY) {
-      setError('Erro de configuração: Chave API em falta.');
-      return;
-    }
-
     setLoading(true);
     setError('');
-    // Fechar sugestões ao pesquisar
     setShowSuggestions(false);
     setTripPlan(null);
 
+    const startDateObj = new Date();
+    const endDateObj = new Date(startDateObj);
+    const numDays = Math.min(parseInt(duration) || 3, 5);
+    endDateObj.setDate(startDateObj.getDate() + numDays - 1);
+
     try {
-      // 1. Buscar Previsão 5 dias / 3 horas
-      const res = await fetch(`https://api.openweathermap.org/data/2.5/forecast?q=${city}&units=metric&appid=${API_KEY}&lang=pt`);
-      const data = await res.json();
-
-      if (data.cod === "404") {
-        throw new Error("Cidade não encontrada. Verifique o nome e tente novamente.");
-      }
-      if (data.cod !== "200") {
-        throw new Error(data.message || "Erro desconhecido ao buscar dados.");
-      }
-
-      // 2. Processar dias da viagem (max 5 dias devido à API gratuita)
-      const numDays = Math.min(parseInt(duration) || 3, 5);
-      const dailyForecasts = processForecast(data.list, numDays);
-
-      // 3. Gerar Outfits para cada dia
-      const dailyOutfits = dailyForecasts.map((weather, index) => {
-        return {
-          day: index + 1,
-          weather,
-          outfit: recommendOutfit(items, weather)
-        };
+      const response = await api.getAITravelOutfits({
+        destination: city,
+        start_date: startDateObj.toISOString(),
+        end_date: endDateObj.toISOString(),
+        luggage_limit: 15
       });
 
-      // 4. Gerar Lista de Mala Agregada
-      const packingList = generatePackingList(dailyOutfits);
+      if (response.success && response.daily_outfits) {
+        // Mapear resposta para formato interno da nossa UI
+        const dailyOutfits = response.daily_outfits.map((dayPlan: any, index: number) => {
+          const items = dayPlan.items || [];
+          return {
+            day: index + 1,
+            weather: { temperature: 20, rain: false, windSpeed: 0, humidity: 50 }, // fallback estático
+            outfit: {
+              baseLayer: { items: [items.find((i:any) => i.layer === 1) || items[0]].filter(Boolean).map(item => ({ item, reasoning: "" })), reasoning: "", isMissing: false },
+              insulationLayer: { items: [items.find((i:any) => i.layer === 2) || items[1]].filter(Boolean).map(item => ({ item, reasoning: "" })), reasoning: "", isMissing: false },
+              outerLayer: { items: [items.find((i:any) => i.layer === 3)].filter(Boolean).map(item => ({ item, reasoning: "" })), reasoning: "", isMissing: false }
+            }
+          };
+        });
 
-      setTripPlan({
-        city: data.city.name,
-        country: data.city.country,
-        dailyOutfits,
-        packingList
-      });
+        const packingList = (response.packing_list || []).map((item: any) => ({
+          item: item, count: 1
+        }));
 
+        setTripPlan({
+          city: city,
+          country: "",
+          dailyOutfits,
+          packingList,
+          isAI: true
+        });
+      } else {
+        setError(response.error || "Ocorreu um erro com o LLaVA. Usa a opção standard.");
+      }
     } catch (error: any) {
       console.error(error);
-      setError(error.message || "Erro ao planear viagem. Tente novamente.");
+      setError(error.message || "Erro no serviço AI. Usa a opção de geração local.");
     } finally {
       setLoading(false);
     }
   };
 
-  const processForecast = (list: any[], days: number): WeatherData[] => {
-    // A API retorna dados a cada 3 horas (8 registos por dia)
-    // Vamos pegar no ponto do meio-dia (aprox) para simplificar a "temperatura do dia"
-    // Ou calcular média/max/min. Para simplificar: pegar o max do dia.
 
-    // Agrupar por dia (aproximado, pegando chunks de 8)
-    const dayChunks = chunk(list, 8).slice(0, days);
-
-    return dayChunks.map(chunk => {
-      // Calcular temp max e min do bloco
-      const maxTemp = Math.max(...chunk.map((i: any) => i.main.temp));
-      const hasRain = chunk.some((i: any) => i.weather[0].main.toLowerCase().includes('rain'));
-      const maxWind = Math.max(...chunk.map((i: any) => i.wind.speed));
-
-      // Usar a descrição do meio do dia
-      const midDay = chunk[Math.floor(chunk.length / 2)];
-
-      return {
-        temperature: maxTemp,
-        rain: hasRain,
-        windSpeed: maxWind,
-        season: calculateSeason(maxTemp), // Helper simples
-        humidity: midDay.main.humidity
-      };
-    });
-  };
-
-  const calculateSeason = (temp: number) => {
-    if (temp >= 20) return 'Summer';
-    if (temp <= 10) return 'Winter';
-    return 'Spring/Fall';
-  };
-
-  const generatePackingList = (dailyOutfits: any[]) => {
-    // Lógica para otimizar mala
-    // 1. Base Layers: 1 por dia (são sujos rápido)
-    // 2. Mid/Outer/Pants: Tentar reutilizar
-
-    const uniqueItems = new Set<string>();
-    const list: Record<string, { item: ClothingItem, count: number }> = {};
-
-    dailyOutfits.forEach(day => {
-      const parts = [
-        day.outfit.baseLayer.items[0]?.item,
-        day.outfit.insulationLayer.items[0]?.item,
-        day.outfit.outerLayer.items[0]?.item,
-        // Adicionar calças (assumindo que insulationLayer items[1] é calça se for layer 2 strategy antiga, 
-        // mas agora temos items array. Vamos simplificar e pegar tudo o que foi recomendado)
-      ].filter(Boolean);
-
-      // A `recommendOutfit` nova estrutura retorna items[] para cada layer.
-      // Vamos varrer todos.
-      [
-        ...day.outfit.baseLayer.items,
-        ...day.outfit.insulationLayer.items,
-        ...day.outfit.outerLayer.items
-      ].forEach(rec => {
-        const item = rec.item;
-        if (item) {
-          if (!list[item.id]) {
-            list[item.id] = { item, count: 0 };
-          }
-          // Lógica simples: Se for Base layer -> +1 por uso. 
-          // Se for Outer/Bottom -> Só conta 1 vez (leva o mesmo)
-          // Para simplificar nesta versão: Adiciona à lista se não existir ("Leva este casaco").
-          // Se for base layer (layer 1), incrementa contador idealmente.
-
-          if (item.layer === 1) {
-            list[item.id].count += 1;
-          } else {
-            list[item.id].count = 1; // Leva 1 deste, reutiliza
-          }
-        }
-      });
-    });
-
-    return Object.values(list);
-  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -270,9 +195,11 @@ export function TravelPlannerDialog({ open, onOpenChange, items }: TravelPlanner
               />
             </div>
           </div>
-          <Button onClick={handleSearch} disabled={loading} className="w-full bg-emerald-700 hover:bg-emerald-800 text-white mt-2">
-            {loading ? 'A Planear Viagem...' : 'Gerar Mala de Viagem'}
-          </Button>
+          <div className="flex flex-col mt-4">
+             <Button onClick={handleSearch} disabled={loading} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm font-medium py-6 text-md">
+               {loading ? <RefreshCw className="mr-2 h-5 w-5 animate-spin"/> : <span className="flex items-center gap-2"><Sparkles className="h-5 w-5"/> Gerar Mala de Viagem (AI)</span>}
+             </Button>
+          </div>
         </div>
 
         {tripPlan && (

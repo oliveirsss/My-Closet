@@ -128,12 +128,43 @@ class RecommendationService:
                     "No suitable wardrobe items available for recommendation"
                 )
 
-            # For now (Phase 2), we don't call VLM yet
-            # Just return the prepared context as a response for Phase 3 integration
-            # When Phase 3 is ready, VLM call will go here
+            # Phase 3: Call VLM directly
+            vlm_response = await self.vlm_service.recommend_outfit(
+                wardrobe_items=[item.to_dict() for item in ai_context.get_all_items()],
+                weather_context=ai_context.weather_current.to_dict() if ai_context.weather_current else {},
+                user_context={
+                    "preferences": ai_context.user_constraints.get("preferences", {}),
+                    "occasion": occasion
+                }
+            )
 
-            # Fallback: Return best option from available items
-            return await self._fallback_daily_recommendation_from_context(ai_context)
+            if not vlm_response.success:
+                print(f"VLM request failed, falling back. Error: {vlm_response.error}")
+                return await self._fallback_daily_recommendation_from_context(ai_context)
+
+            # Map the IDs returned by the VLM back to real objects
+            outfit_items = []
+            valid_ids = set()
+            for recommended_id in vlm_response.outfit_items:
+                item = next((i for i in ai_context.get_all_items() if i.id == recommended_id), None)
+                if item:
+                    outfit_items.append(item)
+                    valid_ids.add(recommended_id)
+
+            if not outfit_items:
+                print("VLM returned no valid item IDs, falling back.")
+                return await self._fallback_daily_recommendation_from_context(ai_context)
+            
+            return {
+                "success": True,
+                "outfit": {
+                    "items": [item.to_dict() for item in outfit_items],
+                    "reasoning": vlm_response.reasoning,
+                },
+                "model_used": "vlm",
+                "context_used": "ai_ready_context",
+                "timestamp": datetime.now().isoformat(),
+            }
 
         except Exception as e:
             print(f"Error in daily recommendation: {e}")
@@ -190,11 +221,51 @@ class RecommendationService:
                     "No suitable wardrobe items available for travel planning"
                 )
 
-            # For now (Phase 2), we don't call VLM yet
-            # Just return the prepared context as a response for Phase 3 integration
+            # Call VLM
+            vlm_responses = await self.vlm_service.recommend_travel_outfits(
+                wardrobe_items=[item.to_dict() for item in ai_context.get_all_items()],
+                weather_forecast=[w.to_dict() for w in ai_context.weather_forecast],
+                num_days=(end_date - start_date).days + 1,
+                user_context={
+                    "preferences": ai_context.user_constraints.get("preferences", {}),
+                    "destination": destination
+                }
+            )
 
-            # Fallback: Return packing list from available items
-            return await self._fallback_travel_recommendation_from_context(ai_context)
+            daily_outfits = []
+            packing_items = {}
+
+            for day_idx, vlm_resp in enumerate(vlm_responses):
+                if not vlm_resp.success:
+                    continue
+                day_outfit = []
+                for item_id in vlm_resp.outfit_items:
+                    item = ai_context.get_item(item_id)
+                    if item:
+                        day_outfit.append(item.to_dict())
+                        packing_items[item_id] = item.to_dict()
+                
+                daily_outfits.append({
+                    "day": day_idx + 1,
+                    "items": day_outfit,
+                    "reasoning": vlm_resp.reasoning
+                })
+
+            if not daily_outfits:
+                print("VLM returned no valid travel outfits, falling back.")
+                return await self._fallback_travel_recommendation_from_context(ai_context)
+
+            return {
+                "success": True,
+                "travel_plan": {
+                    "daily_outfits": daily_outfits,
+                    "packing_list": list(packing_items.values()),
+                    "packing_notes": "AI optimized capsule wardrobe.",
+                },
+                "model_used": "vlm",
+                "context_used": "ai_ready_context",
+                "timestamp": datetime.now().isoformat(),
+            }
 
         except Exception as e:
             print(f"Error in travel recommendation: {e}")
@@ -255,13 +326,41 @@ class RecommendationService:
                     "No alternative wardrobe items available"
                 )
 
-            # For now (Phase 2), we don't call VLM yet
-            # Just return the prepared context as a response for Phase 3 integration
-
-            # Fallback: Return alternatives from available items
-            return await self._fallback_alternative_recommendation_from_context(
-                ai_context, num_alternatives
+            # Call VLM
+            vlm_responses = await self.vlm_service.recommend_alternatives(
+                current_outfit_items=[ai_context.get_item(i).to_dict() for i in current_outfit_item_ids if ai_context.get_item(i)],
+                all_wardrobe_items=[item.to_dict() for item in ai_context.get_all_items()],
+                weather_context=ai_context.weather_current.to_dict() if ai_context.weather_current else {},
+                num_alternatives=num_alternatives,
+                user_context={"preferences": ai_context.user_constraints.get("preferences", {})}
             )
+
+            alternatives = []
+            for vlm_resp in vlm_responses:
+                if not vlm_resp.success:
+                    continue
+                alt_items = []
+                for item_id in vlm_resp.outfit_items:
+                    item = ai_context.get_item(item_id)
+                    if item:
+                        alt_items.append(item.to_dict())
+                if alt_items:
+                    alternatives.append({
+                        "items": alt_items,
+                        "reasoning": vlm_resp.reasoning
+                    })
+
+            if not alternatives:
+                print("VLM returned no alternatives, falling back.")
+                return await self._fallback_alternative_recommendation_from_context(ai_context, num_alternatives)
+
+            return {
+                "success": True,
+                "alternatives": alternatives,
+                "model_used": "vlm",
+                "context_used": "ai_ready_context",
+                "timestamp": datetime.now().isoformat(),
+            }
 
         except Exception as e:
             print(f"Error in alternative recommendation: {e}")

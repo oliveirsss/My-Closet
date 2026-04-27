@@ -9,6 +9,8 @@ import { supabase } from "./lib/supabase";
 import * as api from "./services/api";
 import { UserType, Screen, ClothingItem } from "./types";
 
+import { toast } from "sonner";
+
 function App() {
   const [userType, setUserType] = useState<UserType>(null);
   const [currentScreen, setCurrentScreen] = useState<Screen>("login");
@@ -19,6 +21,7 @@ function App() {
   // viewMode: 'personal' (My Closet) or 'community' (Our Closet)
   const [viewMode, setViewMode] = useState<"personal" | "community">("personal");
   const [showLikedOnly, setShowLikedOnly] = useState(false); // New state for Liked Items filter
+  const [aiOutfitItems, setAiOutfitItems] = useState<ClothingItem[] | null>(null);
 
   const [ownerFilter, setOwnerFilter] = useState<{
     id: string;
@@ -135,7 +138,7 @@ function App() {
           setCurrentScreen("dashboard");
         }
       } catch (error: any) {
-        alert(error.message || "Erro ao fazer login");
+        toast.error("Email ou password inválidos!");
       }
     }
   };
@@ -151,6 +154,7 @@ function App() {
     setOwnerFilter(null);
     setViewMode("personal");
     setShowLikedOnly(false);
+    setAiOutfitItems(null);
   };
 
   const handleAddItem = async (item: ClothingItem) => {
@@ -163,10 +167,6 @@ function App() {
     if (viewMode === "community") {
       // Logic for LIKES (Social)
       const isLiked = !!updatedItem.isLikedByMe;
-      // NOTE: updatedItem comes with 'favorite' toggled from component, but we ignore that for social.
-      // We toggle isLikedByMe based on its current value (before valid click logic, but here we assume toggle)
-      // Wait, the FavoriteButton sends the item with 'favorite' property flipped if we don't change it.
-      // But simplified: we just toggle the boolean.
 
       // Correct approach: Look at the item in state, not the incoming argument which might be misleading
       const currentItem = items.find(i => i.id === updatedItem.id);
@@ -250,6 +250,8 @@ function App() {
         onNavigate={setCurrentScreen}
         onLogout={handleLogout}
         onViewItem={handleViewDetail}
+        aiOutfitItems={aiOutfitItems}
+        setAiOutfitItems={setAiOutfitItems}
       />
     );
   }

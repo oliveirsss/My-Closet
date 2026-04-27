@@ -25,12 +25,20 @@ from schemas.ai_outfit import (
     OutfitSuggestion,
 )
 from services.recommendation_service import RecommendationService
-from services.vlm_service import MockVLMService
+from services.vlm_service import LLaVAService
 
 router = APIRouter(prefix="/ai-outfit", tags=["ai-outfit"])
 
 # Initialize services
-vlm_service = MockVLMService()  # Phase 1: Mock. Phase 2: LLaVA integration
+import os
+
+# Create VLM service. Falls back to mock if LLaVA is not enabled.
+if os.getenv("ENABLE_VLM", "true").lower() == "true":
+    vlm_service = LLaVAService() # Phase 2: LLaVA integration
+else:
+    from services.vlm_service import MockVLMService
+    vlm_service = MockVLMService() 
+
 recommendation_service = RecommendationService(vlm_service=vlm_service)
 
 
@@ -131,7 +139,7 @@ async def get_daily_outfit_recommendation(
             primary_outfit=OutfitSuggestion(
                 outfit_id=f"{user_id}_{int(datetime.now().timestamp())}",
                 items=formatted_items,
-                reasoning=result.get("reasoning", "AI-generated outfit recommendation"),
+                reasoning=outfit_data.get("reasoning", result.get("reasoning", "AI-generated outfit recommendation")),
                 weather_compatibility=result.get("weather_compatibility", {}),
                 style_score=0.8,
                 comfort_score=0.8,
@@ -449,7 +457,7 @@ async def ai_recommendation_health_check():
             "travel",
             "alternative",
         ],
-        "phase": "1",
-        "note": "Phase 1: Mock VLM. Phase 2: LLaVA integration",
+        "phase": "2",
+        "note": "LLaVA integration live via external API",
         "timestamp": datetime.now().isoformat(),
     }
