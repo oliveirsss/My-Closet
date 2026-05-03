@@ -41,8 +41,6 @@ import {
 // API
 import { supabase } from "../../lib/supabase";
 import * as api from "../../services/api";
-// Outfit Recommendation Service
-import { WeatherData } from "../../services/outfitRecommendation";
 
 // --- CONFIGURAÇÃO DA API ---
 const API_KEY = import.meta.env.VITE_OPENWEATHER_API_KEY || "";
@@ -97,8 +95,6 @@ export function Dashboard({
     city: "A localizar...",
     loading: true,
   });
-
-  const [isGeneratingAi, setIsGeneratingAi] = useState(false);
 
   const [isAIChatOpen, setIsAIChatOpen] = useState(false);
 
@@ -250,36 +246,10 @@ export function Dashboard({
     }
   };
 
-  const weatherData: WeatherData = {
-    temperature: weather.temp,
-    rain: weather.rain,
-    windSpeed: weather.windSpeed,
-    humidity: weather.humidity,
+  const handleRegenerateAiOutfit = () => {
+    setWearConfirmed(false);
+    setIsAIChatOpen(true);
   };
-
-  // Auto-fetch AI suggestion
-  useEffect(() => {
-    if (!aiOutfitItems && !weather.loading && items.length > 0 && !isGeneratingAi) {
-      setIsGeneratingAi(true);
-      api.getAIDailyOutfit({
-        temp: weather.temp,
-        condition: weather.condition,
-        humidity: weather.humidity,
-        wind_speed: weather.windSpeed,
-      })
-        .then((res) => {
-          if (res.success && res.primary_outfit) {
-            setAiOutfitItems(res.primary_outfit.items);
-          }
-        })
-        .catch((err) => {
-          console.error("Erro a gerar AI outfit:", err);
-        })
-        .finally(() => {
-          setIsGeneratingAi(false);
-        });
-    }
-  }, [weather.loading, items.length, aiOutfitItems]);
 
   // Helper to convert flat AI items to LayerRecommendation format
   const buildLayerFromAiItems = (aiItems: ClothingItem[]): { baseLayer: any; insulationLayer: any; outerLayer: any } => {
@@ -292,12 +262,9 @@ export function Dashboard({
       return s.includes('sapato') || s.includes('sapatilha') || s.includes('ténis') || s.includes('tenis') || s.includes('sneaker') || s.includes('bota') || s.includes('calçado') || s.includes('shoe') || s.includes('jordan') || s.includes('dunk') || s.includes('af1');
     };
 
-    const baseItems: ItemRecommendation[] = [];
-    const insulationItems: ItemRecommendation[] = [];
-    const outerItems: ItemRecommendation[] = [];
-
-    let hasBottom = false;
-    let hasShoe = false;
+    const baseItems: any[] = [];
+    const insulationItems: any[] = [];
+    const outerItems: any[] = [];
 
     aiItems.forEach(item => {
       const layer = item.layer || 1;
@@ -306,28 +273,15 @@ export function Dashboard({
         // Camada 3: Proteção Externa (Casacos, sapatilhas, acessórios)
         const category = isShoe(item) ? 'shoes' : 'jacket';
         outerItems.push({ item, reasoning: '', category });
-        if (category === 'shoes') hasShoe = true;
       } else if (layer === 2 || isBottom(item)) {
         // Camada 2: Intermédia (Camisolas quentes, calças de inverno, etc)
         // OBS: Calças/Calções são sempre Camada 2 para apresentar na coluna certa.
         insulationItems.push({ item, reasoning: '' });
-        if (isBottom(item)) hasBottom = true;
       } else {
         // Camada 1: Base (T-shirts, tops, calções leves, etc)
         baseItems.push({ item, reasoning: '' });
-        if (isBottom(item)) hasBottom = true; // Just in case
       }
     });
-
-    // Rescue real items from wardrobe if missing
-    if (!hasBottom) {
-      const real = items.find(i => i.status === 'clean' && isBottom(i));
-      if (real) insulationItems.push({ item: real, reasoning: 'Adicionado automaticamente' });
-    }
-    if (!hasShoe) {
-      const real = items.find(i => i.status === 'clean' && isShoe(i));
-      if (real) outerItems.push({ item: real, reasoning: 'Adicionado automaticamente', category: 'shoes' });
-    }
 
     return {
       baseLayer: { items: baseItems, reasoning: '', isMissing: baseItems.length === 0 },
@@ -349,8 +303,12 @@ export function Dashboard({
     ? aiOutfitItems.map(i => i.id).filter(Boolean)
     : [];
 
+  useEffect(() => {
+    console.log("[Dashboard] daily_suggestion_item_ids", currentOutfitItemIds);
+  }, [currentOutfitItemIds.join(",")]);
+
   const handleWearConfirm = async () => {
-    if (wearLoading || wearConfirmed) return;
+    if (wearLoading || wearConfirmed || currentOutfitItemIds.length === 0) return;
     setWearLoading(true);
     try {
       await api.recordOutfitUsage(currentOutfitItemIds);
@@ -378,6 +336,7 @@ export function Dashboard({
   };
 
   const handleAcceptAiOutfit = (outfitItems: ClothingItem[]) => {
+    console.log("[Dashboard] accepted_suggestion_item_ids", outfitItems.map(item => item.id));
     setAiOutfitItems(outfitItems);
     setWearConfirmed(false);
   };
@@ -551,25 +510,28 @@ export function Dashboard({
               <Button
                 variant="outline"
                 size="sm"
-                disabled={isGeneratingAi}
-                onClick={() => { setAiOutfitItems(null); setWearConfirmed(false); }}
+                onClick={handleRegenerateAiOutfit}
                 className="text-stone-600 border-stone-200 hover:bg-stone-50"
               >
-                <RefreshCw className={`mr-2 h-4 w-4 ${isGeneratingAi ? 'animate-spin' : ''}`} />
+                <MessageCircle className="mr-2 h-4 w-4" />
                 Mudar (AI)
               </Button>
             </div>
           </div>
 
-          {isGeneratingAi || !aiOutfitItems ? (
+          {!aiOutfitItems ? (
             <div className="flex flex-col items-center justify-center p-12 bg-white rounded-xl border border-stone-200 shadow-sm min-h-[400px]">
-              <Sparkles className="h-10 w-10 text-emerald-500 mb-4 animate-pulse" />
-              <p className="text-lg font-medium text-stone-700">A gerar sugestão inteligente...</p>
-              <p className="text-sm text-stone-500 mt-2 text-center max-w-sm">
-                A analisar o seu inventário, o estado do tempo atual, e princípios de styling para encontrar a correspondência perfeita.
-                <br /><br />
-                <span className="text-xs opacity-70 bg-stone-100 px-2 py-1 rounded-md">Pode demorar até 60 segundos</span>
+              <Sparkles className="h-10 w-10 text-emerald-500 mb-4" />
+              <p className="text-lg font-medium text-stone-700 text-center">
+                Peça uma sugestão no AI Style Assistant para gerar um outfit.
               </p>
+              <Button
+                className="mt-5 bg-emerald-600 hover:bg-emerald-700 text-white"
+                onClick={() => setIsAIChatOpen(true)}
+              >
+                <MessageCircle className="mr-2 h-4 w-4" />
+                Abrir AI Style Assistant
+              </Button>
             </div>
           ) : (
             <OutfitMannequin
@@ -584,9 +546,11 @@ export function Dashboard({
           <div className="mt-4 flex flex-col sm:flex-row items-center gap-3">
             <button
               onClick={handleWearConfirm}
-              disabled={wearLoading || wearConfirmed}
+              disabled={wearLoading || wearConfirmed || currentOutfitItemIds.length === 0}
               className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all shadow-sm ${
-                wearConfirmed
+                currentOutfitItemIds.length === 0
+                  ? 'bg-stone-100 text-stone-400 border border-stone-200 cursor-not-allowed'
+                  : wearConfirmed
                   ? 'bg-emerald-100 text-emerald-700 border border-emerald-200 cursor-default'
                   : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20 active:scale-95'
               }`}

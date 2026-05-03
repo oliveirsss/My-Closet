@@ -22,7 +22,6 @@ interface ChatMessage {
   sender: "user" | "ai";
   text: string;
   isError?: boolean;
-  outfitData?: any;
   missingItems?: string[];
 }
 
@@ -30,6 +29,24 @@ export function AIChatDialog({ open, onOpenChange, weather, items, onViewItem, o
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [currentOutfitItemIds, setCurrentOutfitItemIds] = useState<string[]>([]);
+  const [currentAiSuggestedOutfit, setCurrentAiSuggestedOutfit] = useState<ClothingItem[] | null>(null);
+
+  React.useEffect(() => {
+    const ids = currentAiSuggestedOutfit?.map(item => item.id) || [];
+    console.log(
+      "[AIChatDialog] current_ai_suggested_outfit_ids",
+      ids
+    );
+    console.log(
+      "[AIChatDialog] displayed_chat_card_item_ids",
+      ids
+    );
+    console.log(
+      "[AIChatDialog] frontend_displayed_ids",
+      ids
+    );
+  }, [currentAiSuggestedOutfit]);
 
   const handleSendMessage = async () => {
     if (!inputValue.trim()) return;
@@ -37,13 +54,24 @@ export function AIChatDialog({ open, onOpenChange, weather, items, onViewItem, o
     const userMsg: ChatMessage = { id: Date.now().toString(), sender: "user", text: inputValue };
     setMessages(prev => [...prev, userMsg]);
     setInputValue("");
+    setCurrentAiSuggestedOutfit(null);
     setIsLoading(true);
 
     try {
       const dirtyIds = items.filter(i => i.status === "dirty").map(i => i.id);
-      const response = await api.getAIDailyOutfit(weather, { style: userMsg.text }, dirtyIds);
+      const response = await api.getAIDailyOutfit(
+        weather,
+        {},
+        dirtyIds,
+        userMsg.text,
+        currentOutfitItemIds
+      );
 
       if (response.success) {
+        console.log(
+          "[AIChatDialog] chat_response_item_ids",
+          (response.primary_outfit?.items || []).map((item: ClothingItem) => item.id)
+        );
         // Parse "PECAS_EM_FALTA" from reasoning text
         const reasoning = response.primary_outfit?.reasoning || "";
         const missingMatch = reasoning.match(/PECAS_EM_FALTA:\s*([^\n]+)/i);
@@ -60,10 +88,14 @@ export function AIChatDialog({ open, onOpenChange, weather, items, onViewItem, o
           id: (Date.now() + 1).toString(),
           sender: "ai",
           text: displayText,
-          outfitData: response,
           missingItems,
         };
         setMessages(prev => [...prev, aiMsg]);
+        const nextOutfitIds = (response.primary_outfit?.items || [])
+          .map((item: ClothingItem) => item.id)
+          .filter(Boolean);
+        setCurrentOutfitItemIds(nextOutfitIds);
+        setCurrentAiSuggestedOutfit(response.primary_outfit?.items || null);
       } else {
         const errorMsg: ChatMessage = {
           id: (Date.now() + 1).toString(),
@@ -128,31 +160,6 @@ export function AIChatDialog({ open, onOpenChange, weather, items, onViewItem, o
         baseItems.push(item);
       }
     });
-
-    // Fallback com peças REAIS do armário em vez de placeholders SVG
-    const hasBottoms = baseItems.some(i => isBottomType(i));
-    if (!hasBottoms) {
-      // Procura calças reais no armário do utilizador
-      const realBottom = items.find(i =>
-        i.status === 'clean' &&
-        isBottomType(i)
-      );
-      if (realBottom) {
-        baseItems.push({ ...realBottom, category: 'bottoms' });
-      }
-    }
-
-    const hasShoes = outerItems.some(i => i.category === 'shoes');
-    if (!hasShoes) {
-      // Procura sapatos reais no armário do utilizador
-      const realShoe = items.find(i =>
-        i.status === 'clean' &&
-        isShoeType(i)
-      );
-      if (realShoe) {
-        outerItems.push({ ...realShoe, category: 'shoes' });
-      }
-    }
 
     return {
       baseLayer: { items: baseItems.map(item => ({ item, reasoning: "" })), reasoning: "", isMissing: baseItems.length === 0 },
@@ -220,36 +227,56 @@ export function AIChatDialog({ open, onOpenChange, weather, items, onViewItem, o
                         </div>
                       )}
 
-                      {msg.outfitData && msg.outfitData.primary_outfit?.items?.length > 0 && (
-                        <div className="mt-2 w-full min-w-0 rounded-xl bg-white border border-emerald-100 shadow-sm p-4 animate-in fade-in zoom-in duration-300 overflow-hidden max-w-full mx-auto" style={{ maxWidth: '40rem' }}>
-                           <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wider mb-4 border-b border-emerald-50 pb-2 flex items-center gap-2"><Sparkles className="w-3 h-3"/> Outfit Sugerido</p>
-                           <div className="scale-90 origin-top overflow-visible -mb-8">
-                             <OutfitMannequin
-                               baseLayer={mapAiToLayers(msg.outfitData.primary_outfit.items).baseLayer}
-                               insulationLayer={mapAiToLayers(msg.outfitData.primary_outfit.items).insulationLayer}
-                               outerLayer={mapAiToLayers(msg.outfitData.primary_outfit.items).outerLayer}
-                               onViewItem={onViewItem}
-                               hideDetails={true}
-                             />
-                           </div>
-                           {onAcceptOutfit && (
-                             <button
-                               onClick={() => {
-                                 onAcceptOutfit(msg.outfitData.primary_outfit.items as ClothingItem[]);
-                                 onOpenChange(false);
-                               }}
-                               className="mt-4 w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-all shadow-sm shadow-emerald-600/20 flex items-center justify-center gap-2"
-                             >
-                               <Sparkles className="w-4 h-4" />
-                               Definir como Sugestão do Dia
-                             </button>
-                           )}
-                        </div>
-                      )}
                     </div>
                   </div>
                 </div>
               ))}
+
+              {currentAiSuggestedOutfit && currentAiSuggestedOutfit.length > 0 && (
+                <div className="flex justify-start">
+                  <div className="flex gap-3 max-w-[85%]">
+                    <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center mt-1 shadow-sm bg-emerald-600 text-white">
+                      <Bot className="w-4 h-4" />
+                    </div>
+                    <div className="mt-2 w-full min-w-0 rounded-xl bg-white border border-emerald-100 shadow-sm p-4 animate-in fade-in zoom-in duration-300 overflow-hidden max-w-full mx-auto" style={{ maxWidth: '40rem' }}>
+                      <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wider mb-4 border-b border-emerald-50 pb-2 flex items-center gap-2">
+                        <Sparkles className="w-3 h-3" />
+                        Outfit Sugerido
+                      </p>
+                      <div className="scale-90 origin-top overflow-visible -mb-8">
+                        <OutfitMannequin
+                          baseLayer={mapAiToLayers(currentAiSuggestedOutfit).baseLayer}
+                          insulationLayer={mapAiToLayers(currentAiSuggestedOutfit).insulationLayer}
+                          outerLayer={mapAiToLayers(currentAiSuggestedOutfit).outerLayer}
+                          onViewItem={onViewItem}
+                          hideDetails={true}
+                        />
+                      </div>
+                      {onAcceptOutfit && (
+                        <button
+                          onClick={() => {
+                            const acceptedItems = currentAiSuggestedOutfit;
+                            console.log(
+                              "[AIChatDialog] accepted_suggestion_item_ids",
+                              acceptedItems.map(item => item.id)
+                            );
+                            console.log(
+                              "[AIChatDialog] accepted_suggestion_ids",
+                              acceptedItems.map(item => item.id)
+                            );
+                            onAcceptOutfit(acceptedItems);
+                            onOpenChange(false);
+                          }}
+                          className="mt-4 w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-all shadow-sm shadow-emerald-600/20 flex items-center justify-center gap-2"
+                        >
+                          <Sparkles className="w-4 h-4" />
+                          Definir como Sugestão do Dia
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
               
               {isLoading && (
                  <div className="flex justify-start">

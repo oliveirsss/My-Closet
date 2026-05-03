@@ -14,8 +14,8 @@ import * as api from '../../services/api';
 interface AddItemDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onAdd?: (item: ClothingItem) => void;
-  onUpdate?: (item: ClothingItem) => void;
+  onAdd?: (item: ClothingItem) => void | Promise<void>;
+  onUpdate?: (item: ClothingItem) => void | Promise<void>;
   itemToEdit?: ClothingItem | null;
 }
 
@@ -24,12 +24,16 @@ export function AddItemDialog({ open, onOpenChange, onAdd, onUpdate, itemToEdit 
   const [imagePreview, setImagePreview] = useState<string>('');
   const [uploadedImageUrl, setUploadedImageUrl] = useState<string>('');
   const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   // Form States
   const [name, setName] = useState('');
   const [brand, setBrand] = useState('');
   const [size, setSize] = useState('');
   const [type, setType] = useState('');
+  const [color, setColor] = useState('');
+  const [style, setStyle] = useState('');
+  const [occasion, setOccasion] = useState('');
   const [layer, setLayer] = useState<1 | 2 | 3>(1);
   const [materials, setMaterials] = useState<string[]>([]);
   const [materialInput, setMaterialInput] = useState('');
@@ -40,13 +44,17 @@ export function AddItemDialog({ open, onOpenChange, onAdd, onUpdate, itemToEdit 
   const [seasons, setSeasons] = useState<string[]>([]);
 
   const clothingTypes = ['Casaco', 'Camisola', 'T-shirt', 'Camisa', 'Calças', 'Calções', 'Vestido', 'Calçado'];
+  const styleOptions = ['casual', 'formal', 'sporty', 'streetwear', 'smart casual', 'elegant'];
+  const occasionOptions = ['daily', 'work', 'party', 'gym', 'travel', 'date', 'beach'];
   const allSeasons = ['Inverno', 'Outono', 'Primavera', 'Verão'];
 
   // Reset e Carregamento
   useEffect(() => {
     if (open) {
+      setSaving(false);
       if (itemToEdit) {
         setName(itemToEdit.name); setBrand(itemToEdit.brand); setSize(itemToEdit.size);
+        setColor(itemToEdit.color || ''); setStyle(itemToEdit.style || ''); setOccasion(itemToEdit.occasion || '');
         setType(itemToEdit.type); setLayer(itemToEdit.layer as 1 | 2 | 3); setMaterials(itemToEdit.materials);
         setWeight(itemToEdit.weight.toString()); setTempRange([itemToEdit.tempMin, itemToEdit.tempMax]);
         setWaterproof(itemToEdit.waterproof); setWindproof(itemToEdit.windproof); setSeasons(itemToEdit.seasons);
@@ -84,15 +92,21 @@ export function AddItemDialog({ open, onOpenChange, onAdd, onUpdate, itemToEdit 
 
   const resetForm = () => {
     setImagePreview(''); setUploadedImageUrl(''); setName(''); setBrand(''); setSize('');
+    setColor(''); setStyle(''); setOccasion('');
     setType(''); setLayer(1); setMaterials([]); setMaterialInput(''); setWeight('');
     setTempRange([5, 15]); setWaterproof(false); setWindproof(false); setSeasons([]);
-    setUploading(false);
+    setUploading(false); setSaving(false);
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    const normalizeOptionalText = (value: string) => value.trim().toLowerCase() || undefined;
+
     const finalItem: ClothingItem = {
       id: itemToEdit ? itemToEdit.id : Date.now().toString(),
       name, brand, size, type, layer, materials,
+      color: normalizeOptionalText(color),
+      style: normalizeOptionalText(style),
+      occasion: normalizeOptionalText(occasion),
       weight: parseFloat(weight) || 0,
       tempMin: tempRange[0], tempMax: tempRange[1],
       waterproof, windproof, seasons,
@@ -101,9 +115,23 @@ export function AddItemDialog({ open, onOpenChange, onAdd, onUpdate, itemToEdit 
       favorite: itemToEdit ? itemToEdit.favorite : false,
       isPublic: itemToEdit ? itemToEdit.isPublic : false
     };
-    if (itemToEdit && onUpdate) onUpdate(finalItem);
-    else if (onAdd) onAdd(finalItem);
-    onOpenChange(false);
+
+    console.log("[AddItemDialog] item payload before save", {
+      ...finalItem,
+      image: finalItem.image ? `${finalItem.image.slice(0, 80)}...(${finalItem.image.length} chars)` : finalItem.image,
+    });
+
+    setSaving(true);
+    try {
+      if (itemToEdit && onUpdate) await onUpdate(finalItem);
+      else if (onAdd) await onAdd(finalItem);
+      onOpenChange(false);
+    } catch (error) {
+      console.error("Save item error:", error);
+      alert(error instanceof Error ? error.message : "Erro ao guardar peça");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const addMaterial = () => { if (materialInput && !materials.includes(materialInput)) { setMaterials([...materials, materialInput]); setMaterialInput(''); } };
@@ -115,7 +143,7 @@ export function AddItemDialog({ open, onOpenChange, onAdd, onUpdate, itemToEdit 
   const canSubmit = seasons.length > 0;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!saving) onOpenChange(nextOpen); }}>
       {/* MODIFICAÇÃO IMPORTANTE DE LAYOUT:
           h-[85vh]: Altura fixa de 85% do ecrã.
           flex-col: Para organizar Header, Body e Footer verticalmente.
@@ -182,6 +210,7 @@ export function AddItemDialog({ open, onOpenChange, onAdd, onUpdate, itemToEdit 
                 <div><Label>Nome *</Label><Input value={name} onChange={(e) => setName(e.target.value)} className="mt-1" /></div>
                 <div><Label>Marca *</Label><Input value={brand} onChange={(e) => setBrand(e.target.value)} className="mt-1" /></div>
                 <div><Label>Tamanho *</Label><Input value={size} onChange={(e) => setSize(e.target.value)} className="mt-1" /></div>
+                <div><Label>Cor</Label><Input value={color} onChange={(e) => setColor(e.target.value)} placeholder="Ex: amarelo" className="mt-1" /></div>
               </div>
             </div>
           )}
@@ -190,6 +219,8 @@ export function AddItemDialog({ open, onOpenChange, onAdd, onUpdate, itemToEdit 
             <div className="space-y-6">
               <h3 className="text-emerald-900 font-medium text-lg">Passo 2: Classificação</h3>
               <div><Label>Tipo *</Label><div className="grid grid-cols-4 gap-2 mt-2">{clothingTypes.map(t => <Button key={t} variant={type === t ? 'default' : 'outline'} onClick={() => setType(t)} className={type === t ? 'bg-emerald-700 text-white hover:bg-emerald-800' : ''}>{t}</Button>)}</div></div>
+              <div><Label>Estilo</Label><div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2">{styleOptions.map(option => <Button key={option} type="button" variant={style === option ? 'default' : 'outline'} onClick={() => setStyle(style === option ? '' : option)} className={style === option ? 'bg-emerald-700 text-white hover:bg-emerald-800 capitalize' : 'capitalize'}>{option}</Button>)}</div></div>
+              <div><Label>Ocasião</Label><div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">{occasionOptions.map(option => <Button key={option} type="button" variant={occasion === option ? 'default' : 'outline'} onClick={() => setOccasion(occasion === option ? '' : option)} className={occasion === option ? 'bg-emerald-700 text-white hover:bg-emerald-800 capitalize' : 'capitalize'}>{option}</Button>)}</div></div>
               <div><Label>Camada *</Label><div className="grid grid-cols-3 gap-2 mt-2">{[1, 2, 3].map(l => <Button key={l} variant={layer === l ? 'default' : 'outline'} onClick={() => setLayer(l as 1 | 2 | 3)} className={layer === l ? 'bg-emerald-700 text-white hover:bg-emerald-800' : ''}>Camada {l}</Button>)}</div></div>
               <div><Label>Materiais *</Label><div className="flex gap-2 mt-2"><Input value={materialInput} onChange={(e) => setMaterialInput(e.target.value)} placeholder="Ex: Algodão" onKeyDown={(e) => e.key === 'Enter' && addMaterial()} /><Button onClick={addMaterial} type="button">Adicionar</Button></div><div className="flex gap-2 flex-wrap mt-2">{materials.map(m => <Badge key={m} variant="secondary" onClick={() => removeMaterial(m)} className="cursor-pointer">{m} ×</Badge>)}</div></div>
               <div><Label>Peso (g) *</Label><Input type="number" value={weight} onChange={(e) => setWeight(e.target.value)} className="mt-1" /></div>
@@ -208,11 +239,14 @@ export function AddItemDialog({ open, onOpenChange, onAdd, onUpdate, itemToEdit 
 
         {/* --- 3. RODAPÉ FIXO --- */}
         <div className="flex justify-between p-4 border-t border-stone-100 bg-stone-50 shrink-0">
-          <Button variant="outline" onClick={() => step > 1 ? setStep(step - 1) : onOpenChange(false)}><ChevronLeft className="mr-2 h-4 w-4" /> {step > 1 ? 'Anterior' : 'Cancelar'}</Button>
+          <Button variant="outline" disabled={saving} onClick={() => step > 1 ? setStep(step - 1) : onOpenChange(false)}><ChevronLeft className="mr-2 h-4 w-4" /> {step > 1 ? 'Anterior' : 'Cancelar'}</Button>
           {step < 3 ? (
-            <Button onClick={() => setStep(step + 1)} disabled={step === 1 ? !canProceedStep1 : !canProceedStep2} className="bg-emerald-700 hover:bg-emerald-800 text-white">Próximo <ChevronRight className="ml-2 h-4 w-4" /></Button>
+            <Button onClick={() => setStep(step + 1)} disabled={saving || (step === 1 ? !canProceedStep1 : !canProceedStep2)} className="bg-emerald-700 hover:bg-emerald-800 text-white">Próximo <ChevronRight className="ml-2 h-4 w-4" /></Button>
           ) : (
-            <Button onClick={handleSubmit} disabled={!canSubmit || uploading} className="bg-emerald-700 hover:bg-emerald-800 text-white">{itemToEdit ? 'Guardar' : 'Adicionar'}</Button>
+            <Button onClick={handleSubmit} disabled={!canSubmit || uploading || saving} className="bg-emerald-700 hover:bg-emerald-800 text-white">
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {saving ? 'A guardar...' : itemToEdit ? 'Guardar' : 'Adicionar'}
+            </Button>
           )}
         </div>
 

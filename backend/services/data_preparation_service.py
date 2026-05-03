@@ -20,6 +20,68 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database import supabase
+from services.item_scoring_service import ItemScoringService
+
+
+COLOR_ALIASES = {
+    "amarelo": "yellow",
+    "amarelos": "yellow",
+    "amarela": "yellow",
+    "amarelas": "yellow",
+    "azul": "blue",
+    "azuis": "blue",
+    "vermelho": "red",
+    "vermelhos": "red",
+    "vermelha": "red",
+    "vermelhas": "red",
+    "verde": "green",
+    "verdes": "green",
+    "preto": "black",
+    "pretos": "black",
+    "preta": "black",
+    "pretas": "black",
+    "branco": "white",
+    "brancos": "white",
+    "branca": "white",
+    "brancas": "white",
+    "cinza": "gray",
+    "cinzas": "gray",
+    "rosa": "pink",
+    "rosas": "pink",
+    "roxo": "purple",
+    "roxos": "purple",
+    "roxa": "purple",
+    "roxas": "purple",
+    "laranja": "orange",
+    "laranjas": "orange",
+    "marrom": "brown",
+    "marrons": "brown",
+    "bege": "beige",
+    "beges": "beige",
+    "creme": "cream",
+    "cremes": "cream",
+    "ouro": "gold",
+    "ouros": "gold",
+    "prata": "silver",
+    "pratas": "silver",
+    "grey": "gray",
+}
+
+
+def normalize_optional_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+
+    normalized = str(value).strip().lower()
+    return normalized or None
+
+
+def normalize_optional_color(value: Any) -> Optional[str]:
+    normalized = normalize_optional_text(value)
+    if not normalized:
+        return None
+
+    return COLOR_ALIASES.get(normalized, normalized)
 
 
 class AIReadyItem:
@@ -54,6 +116,9 @@ class AIReadyItem:
         # Status and preferences
         self.status = item_dict.get("status", "clean")
         self.favorite = item_dict.get("favorite", False)
+        self.style = normalize_optional_text(item_dict.get("style")) or ""
+        self.occasion = normalize_optional_text(item_dict.get("occasion")) or ""
+        self.score = item_dict.get("score")
 
         # Temperature suitability
         self.temp_min = item_dict.get("temp_min", item_dict.get("tempMin", -10))
@@ -65,7 +130,8 @@ class AIReadyItem:
 
         # Metadata
         self.seasons = item_dict.get("seasons", [])
-        self.color = item_dict.get("color", "")
+        self.color = normalize_optional_color(item_dict.get("color")) or ""
+        self.color_source = item_dict.get("color_source") or ("explicit" if self.color else "unknown")
         self.is_public = item_dict.get("is_public", False)
 
         # Usage metrics (populated by data preparation service)
@@ -91,12 +157,16 @@ class AIReadyItem:
             "image_url": self.image_url,
             "status": self.status,
             "favorite": self.favorite,
+            "style": self.style,
+            "occasion": self.occasion,
+            "score": self.score,
             "temp_min": self.temp_min,
             "temp_max": self.temp_max,
             "waterproof": self.waterproof,
             "windproof": self.windproof,
             "seasons": self.seasons,
             "color": self.color,
+            "color_source": self.color_source,
             "is_public": self.is_public,
             "usage_metrics": self.usage_metrics,
         }
@@ -292,7 +362,12 @@ class DataPreparationService:
     - Builds final AI-ready context objects
     """
 
-    def __init__(self, usage_service=None, weather_service=None):
+    def __init__(
+        self,
+        usage_service=None,
+        weather_service=None,
+        item_scoring_service: Optional[ItemScoringService] = None,
+    ):
         """
         Initialize data preparation service.
 
@@ -303,6 +378,7 @@ class DataPreparationService:
         self.supabase = supabase
         self.usage_service = usage_service
         self.weather_service = weather_service
+        self.item_scoring_service = item_scoring_service or ItemScoringService()
 
     async def prepare_daily_context(
         self,
@@ -314,6 +390,8 @@ class DataPreparationService:
         occasion: Optional[str] = None,
         user_preferences: Optional[Dict[str, Any]] = None,
         exclude_items: Optional[List[str]] = None,
+        must_include_ids: Optional[List[str]] = None,
+        max_items_per_layer: int = 5,
     ) -> AIReadyContext:
         """
         Prepare AI-ready context for daily outfit recommendation.
@@ -329,12 +407,19 @@ class DataPreparationService:
             occasion: Optional occasion (work, casual, etc)
             user_preferences: Optional user style preferences
             exclude_items: Optional item IDs to exclude
+            must_include_ids: Optional item IDs that must remain candidates
+            max_items_per_layer: Maximum scored candidates to keep per layer
 
         Returns:
             AIReadyContext object ready for prompt builder/VLM
         """
         # Step 1: Fetch and enrich wardrobe
-        wardrobe_items = await self._fetch_and_enrich_wardrobe(user_id, exclude_items)
+        wardrobe_items = await self._fetch_and_enrich_wardrobe(
+            user_id,
+            exclude_items,
+            only_clean=False,
+            apply_exclude_filter=False,
+        )
 
         # Step 2: Prepare weather data
         weather_data = {
@@ -347,7 +432,13 @@ class DataPreparationService:
 
         # Step 3: Filter wardrobe items intelligently
         filtered_items = self._filter_wardrobe_for_daily(
-            wardrobe_items, temperature, weather_condition, user_preferences
+            wardrobe_items,
+            temperature,
+            weather_condition,
+            user_preferences,
+            must_include_ids=must_include_ids,
+            exclude_items=exclude_items,
+            max_items_per_layer=max_items_per_layer,
         )
 
         # Step 4: Group items by layer
@@ -357,12 +448,16 @@ class DataPreparationService:
         user_constraints = {
             "occasion": occasion,
             "preferences": user_preferences or {},
+            "must_include_ids": must_include_ids or [],
         }
 
         metadata = {
             "filter_reason": "Daily outfit recommendation",
             "temperature_range": (temperature - 5, temperature + 5),
             "weather_condition": weather_condition,
+            "scoring_enabled": True,
+            "max_items_per_layer": max_items_per_layer,
+            "must_include_ids": must_include_ids or [],
         }
 
         # Step 6: Build and return context
@@ -547,6 +642,8 @@ class DataPreparationService:
         self,
         user_id: str,
         exclude_items: Optional[List[str]] = None,
+        only_clean: bool = True,
+        apply_exclude_filter: bool = True,
     ) -> List[AIReadyItem]:
         """
         Fetch wardrobe items and enrich with usage metrics without blocking UI.
@@ -555,13 +652,10 @@ class DataPreparationService:
 
         def fetch_db_data():
             # Get clothes
-            clothes_resp = (
-                self.supabase.table("clothes")
-                .select("*")
-                .eq("user_id", user_id)
-                .eq("status", "clean")
-                .execute()
-            )
+            clothes_query = self.supabase.table("clothes").select("*").eq("user_id", user_id)
+            if only_clean:
+                clothes_query = clothes_query.eq("status", "clean")
+            clothes_resp = clothes_query.execute()
             # Get usage history
             usage_resp = (
                 self.supabase.table("usage_history")
@@ -575,7 +669,7 @@ class DataPreparationService:
             items, all_usage_records = await asyncio.to_thread(fetch_db_data)
 
             # Filter excluded items
-            if exclude_items:
+            if exclude_items and apply_exclude_filter:
                 items = [item for item in items if item["id"] not in exclude_items]
 
             # Group usage records by clothing_id
@@ -652,64 +746,194 @@ class DataPreparationService:
         temperature: float,
         weather_condition: str,
         user_preferences: Optional[Dict[str, Any]] = None,
+        must_include_ids: Optional[List[str]] = None,
+        exclude_items: Optional[List[str]] = None,
+        max_items_per_layer: int = 5,
     ) -> List[AIReadyItem]:
         """
         Filter wardrobe items for daily recommendation context.
         """
-        filtered = []
+        must_include_set = set(must_include_ids or [])
+        style_preference = self._extract_style_preference(user_preferences)
 
+        weather_candidates = [
+            item
+            for item in items
+            if (
+                item.id in must_include_set
+                or (
+                    item.is_suitable_for_weather(weather_condition)
+                    and self._is_suitable_for_current_temperature(item, temperature)
+                )
+            )
+        ]
         for item in items:
-            # Check temperature compatibility
-            if not item.is_suitable_for_temperature(temperature - 5, temperature + 5):
+            if item.id in must_include_set:
+                if not self._is_suitable_for_current_temperature(item, temperature):
+                    print(
+                        f"[DataPreparation] Keeping must_include outside temperature range: "
+                        f"{item.name} [{item.temp_min}°C,{item.temp_max}°C] at {temperature}°C"
+                    )
                 continue
+            if item.is_suitable_for_weather(weather_condition) and not self._is_suitable_for_current_temperature(item, temperature):
+                print(
+                    f"[DataPreparation] Excluding before LLaVA due to temperature: "
+                    f"{item.name} [{item.temp_min}°C,{item.temp_max}°C] at {temperature}°C"
+                )
 
-            # Check weather compatibility
-            if not item.is_suitable_for_weather(weather_condition):
-                continue
+        if self._is_formal_preference(style_preference):
+            formal_sections = {
+                self._item_section(item)
+                for item in weather_candidates
+                if item.id not in must_include_set and self._looks_formal(item)
+            }
+            if formal_sections:
+                removed = [
+                    item.name for item in weather_candidates
+                    if (
+                        item.id not in must_include_set
+                        and self._item_section(item) in formal_sections
+                        and self._looks_sporty_or_casual(item)
+                    )
+                ]
+                if removed:
+                    print(
+                        "[DataPreparation] Excluding sporty/casual items before LLaVA "
+                        f"for formal request: {removed}"
+                    )
+                weather_candidates = [
+                    item for item in weather_candidates
+                    if (
+                        item.id in must_include_set
+                        or self._item_section(item) not in formal_sections
+                        or not self._looks_sporty_or_casual(item)
+                    )
+                ]
 
-            filtered.append(item)
+        items_by_id = {item.id: item for item in weather_candidates}
+        scored_by_layer = self.item_scoring_service.score_and_filter_items(
+            [item.to_dict() for item in weather_candidates],
+            temperature=temperature,
+            style_preference=style_preference,
+            must_include_ids=must_include_ids,
+            exclude_ids=exclude_items,
+            max_per_layer=max_items_per_layer,
+        )
 
-        # RESCUE LOGIC: User requires that bottoms and shoes are always provided even if not ideal for weather.
-        def is_bottom(i):
-            t = (i.type or "").lower()
-            n = (i.name or "").lower()
-            keys = ["calça", "calca", "jeans", "short", "pant", "trouser", "denim"]
-            return any(k in t for k in keys) or any(k in n for k in keys)
-            
-        def is_shoe(i):
-            t = (i.type or "").lower()
-            n = (i.name or "").lower()
-            keys = ["sapato", "sapatilha", "ténis", "tenis", "bota", "shoe", "sneaker", "calçado"]
-            return any(k in t for k in keys) or any(k in n for k in keys)
-
-        has_bottoms = any(is_bottom(i) for i in filtered)
-        if not has_bottoms:
-            all_bottoms = [i for i in items if is_bottom(i)]
-            if all_bottoms:
-                # Add the one closest to current temperature as fallback
-                best_bottom = min(all_bottoms, key=lambda i: abs(((i.temp_min + i.temp_max)/2) - temperature))
-                filtered.append(best_bottom)
-                
-        has_shoes = any(is_shoe(i) for i in filtered)
-        if not has_shoes:
-            all_shoes = [i for i in items if is_shoe(i)]
-            if all_shoes:
-                best_shoe = min(all_shoes, key=lambda i: abs(((i.temp_min + i.temp_max)/2) - temperature))
-                filtered.append(best_shoe)
-
-        # Sort by priority: favorites first, then by usage (prefer less used)
-        def priority_key(item):
-            priority = 0
-            if item.favorite:
-                priority -= 1000  # Favorites first
-            if item.usage_metrics.get("is_overused"):
-                priority += 100  # Deprioritize overused
-            priority += item.usage_metrics.get("usage_frequency_last_7_days", 0) * 10
-            return priority
-
-        filtered.sort(key=priority_key)
+        filtered: List[AIReadyItem] = []
+        for layer in sorted(scored_by_layer.keys()):
+            for scored_item in scored_by_layer[layer]:
+                item = items_by_id.get(scored_item.get("id"))
+                if not item:
+                    continue
+                item.score = scored_item.get("score")
+                filtered.append(item)
 
         return filtered
+
+    def _is_suitable_for_current_temperature(
+        self, item: AIReadyItem, temperature: float
+    ) -> bool:
+        try:
+            return float(item.temp_min) <= float(temperature) <= float(item.temp_max)
+        except (TypeError, ValueError):
+            return True
+
+    def _extract_style_preference(
+        self, user_preferences: Optional[Dict[str, Any]]
+    ) -> Optional[Union[str, List[str]]]:
+        """Extract the style-like preference used by the scoring service."""
+        if not user_preferences:
+            return None
+
+        for key in ("style", "preferred_style", "preferred_styles", "occasion"):
+            value = user_preferences.get(key)
+            if value:
+                return value
+
+        return None
+
+    def _is_formal_preference(self, style_preference: Optional[Union[str, List[str]]]) -> bool:
+        if isinstance(style_preference, list):
+            text = " ".join(str(value) for value in style_preference)
+        else:
+            text = str(style_preference or "")
+        return "formal" in text.lower()
+
+    def _item_search_text(self, item: AIReadyItem) -> str:
+        return " ".join(
+            str(value or "")
+            for value in [
+                item.name,
+                item.type,
+                item.style,
+                item.occasion,
+                " ".join(str(material) for material in item.materials or []),
+            ]
+        ).lower()
+
+    def _looks_formal(self, item: AIReadyItem) -> bool:
+        text = self._item_search_text(item)
+        positive = [
+            "formal",
+            "camisa",
+            "shirt",
+            "blazer",
+            "casaco formal",
+            "trouser",
+            "trousers",
+            "calças",
+            "calcas",
+            "chino",
+            "sapatos",
+            "boots",
+            "botas",
+            "oxford",
+            "loafer",
+            "work",
+            "office",
+            "business",
+            "elegant",
+        ]
+        return any(keyword in text for keyword in positive)
+
+    def _looks_sporty_or_casual(self, item: AIReadyItem) -> bool:
+        text = self._item_search_text(item)
+        negative = [
+            "jersey",
+            "t-shirt",
+            "tshirt",
+            "tee",
+            "sneaker",
+            "sneakers",
+            "sapatilhas",
+            "tenis",
+            "hoodie",
+            "sportswear",
+            "sport",
+            "sporty",
+            "desportivo",
+            "athletic",
+            "gym",
+            "air jordan",
+        ]
+        return any(keyword in text for keyword in negative)
+
+    def _item_section(self, item: AIReadyItem) -> str:
+        text = self._item_search_text(item)
+        if any(token in text for token in ["sapatilha", "tenis", "sneaker", "shoe", "boot", "calçado", "calcado", "sapato"]):
+            return "shoes"
+        if any(token in text for token in ["calça", "calca", "pants", "trouser", "jeans", "short", "calções", "calcoes", "skirt", "saia"]):
+            return "pants"
+        if any(token in text for token in ["casaco", "jacket", "coat", "blazer", "sobretudo"]):
+            return "outer"
+        if any(token in text for token in ["camisola", "sweater", "hoodie", "sweatshirt", "cardigan"]):
+            return "insulation"
+        if item.layer == 2:
+            return "insulation"
+        if item.layer == 3:
+            return "outer"
+        return "base"
 
     def _filter_wardrobe_for_travel(
         self,

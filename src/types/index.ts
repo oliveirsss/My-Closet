@@ -4,6 +4,10 @@ export interface ClothingItem {
   brand: string;
   size: string;
   type: string;
+  color?: string | null;
+  style?: string | null;
+  occasion?: string | null;
+  section?: "base_layer" | "insulation_layer" | "pants" | "outer_layer" | "shoes" | "accessories" | null;
   layer: number;
   materials: string[];
   weight: number;

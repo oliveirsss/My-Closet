@@ -1,9 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer
 from routers import ai_outfit, auth, items, social, storage, usage  # Import all routers
 
 app = FastAPI()
 
+security = HTTPBearer()
 # Configuração CORS
 app.add_middleware(
     CORSMiddleware,
@@ -20,6 +25,23 @@ app.include_router(storage.router)
 app.include_router(social.router)
 app.include_router(ai_outfit.router)
 app.include_router(usage.router)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    try:
+        body = await request.body()
+        body_text = body.decode("utf-8", errors="replace")
+    except Exception:
+        body_text = "<unavailable>"
+
+    print(f"[validation] {request.method} {request.url.path}: {exc.errors()}")
+    print(f"[validation] request body: {body_text[:2000]}")
+
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(exc.errors())},
+    )
 
 
 @app.get("/health")

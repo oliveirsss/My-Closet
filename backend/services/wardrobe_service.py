@@ -14,7 +14,80 @@ Responsibilities:
 
 from typing import Any, Dict, List, Optional
 
+import os
+
 from database import supabase
+from supabase import create_client
+from services.color_inference_service import infer_dominant_color
+
+
+COLOR_ALIASES = {
+    "amarelo": "yellow",
+    "amarelos": "yellow",
+    "amarela": "yellow",
+    "amarelas": "yellow",
+    "azul": "blue",
+    "azuis": "blue",
+    "vermelho": "red",
+    "vermelhos": "red",
+    "vermelha": "red",
+    "vermelhas": "red",
+    "verde": "green",
+    "verdes": "green",
+    "preto": "black",
+    "pretos": "black",
+    "preta": "black",
+    "pretas": "black",
+    "branco": "white",
+    "brancos": "white",
+    "branca": "white",
+    "brancas": "white",
+    "cinza": "gray",
+    "cinzas": "gray",
+    "rosa": "pink",
+    "rosas": "pink",
+    "roxo": "purple",
+    "roxos": "purple",
+    "roxa": "purple",
+    "roxas": "purple",
+    "laranja": "orange",
+    "laranjas": "orange",
+    "marrom": "brown",
+    "marrons": "brown",
+    "bege": "beige",
+    "beges": "beige",
+    "creme": "cream",
+    "cremes": "cream",
+    "ouro": "gold",
+    "ouros": "gold",
+    "prata": "silver",
+    "pratas": "silver",
+    "grey": "gray",
+}
+
+
+def normalize_optional_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+
+    normalized = str(value).strip().lower()
+    return normalized or None
+
+
+def normalize_optional_color(value: Any) -> Optional[str]:
+    normalized = normalize_optional_text(value)
+    if not normalized:
+        return None
+
+    return COLOR_ALIASES.get(normalized, normalized)
+
+
+def infer_color_from_name(value: Any) -> Optional[str]:
+    text = normalize_optional_text(value) or ""
+    for alias, canonical in sorted(COLOR_ALIASES.items(), key=lambda pair: len(pair[0]), reverse=True):
+        if alias in text.split():
+            return canonical
+    return None
 
 
 class WardrobeService:
@@ -27,7 +100,13 @@ class WardrobeService:
 
     def __init__(self):
         """Initialize the wardrobe service."""
-        self.supabase = supabase
+        service_key = os.environ.get("SUPABASE_SERVICE_KEY")
+        url = os.environ.get("SUPABASE_URL")
+        self.supabase = create_client(url, service_key) if service_key and url else supabase
+        print(
+            "[WardrobeService] Supabase client="
+            f"{'service_role' if service_key and url else 'default'}"
+        )
 
     async def get_user_wardrobe(
         self,
@@ -50,6 +129,11 @@ class WardrobeService:
             WardrobeServiceError: If database query fails
         """
         try:
+            print(
+                "[WardrobeService] Fetch wardrobe "
+                f"user_id={user_id} only_clean={only_clean} exclude_item_ids={exclude_item_ids or []}"
+            )
+
             # Build the query
             query = self.supabase.table("clothes").select("*").eq("user_id", user_id)
 
@@ -59,6 +143,19 @@ class WardrobeService:
 
             response = query.execute()
             items = response.data if response.data else []
+            print(
+                "[WardrobeService] Raw wardrobe rows fetched "
+                f"count={len(items)} user_id={user_id}"
+            )
+            for item in items:
+                print(
+                    "[WardrobeService] Raw wardrobe item "
+                    f"id={item.get('id')} user_id={item.get('user_id')} "
+                    f"name={item.get('name')} type={item.get('type')} "
+                    f"color={item.get('color')} style={item.get('style')} "
+                    f"occasion={item.get('occasion')} status={item.get('status')} "
+                    f"layer={item.get('layer')}"
+                )
 
             # Filter out excluded items
             if exclude_item_ids:
@@ -246,8 +343,33 @@ class WardrobeService:
         Returns:
             Formatted item with all necessary fields for recommendations
         """
+        explicit_color = normalize_optional_color(db_item.get("color"))
+        name_inferred_color = None if explicit_color else infer_color_from_name(
+            f"{db_item.get('name', '')} {db_item.get('type', '')} {db_item.get('brand', '')}"
+        )
+        image_inferred_color = None
+        if not explicit_color and not name_inferred_color:
+            candidate = infer_dominant_color(db_item.get("image", ""))
+            image_inferred_color = candidate if candidate and candidate != "unknown" else None
+        color = explicit_color or name_inferred_color or image_inferred_color or ""
+        color_source = (
+            "explicit"
+            if explicit_color
+            else "name_inferred"
+            if name_inferred_color
+            else "image_inferred"
+            if image_inferred_color
+            else "unknown"
+        )
+
+        print(
+            f"[WardrobeService] Loaded item color source={color_source} "
+            f"color={color or 'unknown'} item={db_item.get('name', db_item.get('id'))}"
+        )
+
         return {
             "id": db_item.get("id"),
+            "user_id": db_item.get("user_id"),
             "name": db_item.get("name", "Unknown Item"),
             "type": db_item.get("type", ""),
             "brand": db_item.get("brand", ""),
@@ -265,7 +387,14 @@ class WardrobeService:
                 "min": db_item.get("temp_min", -10),
                 "max": db_item.get("temp_max", 30),
             },
-            "color": db_item.get("color", ""),
+            "temp_min": db_item.get("temp_min", -10),
+            "temp_max": db_item.get("temp_max", 30),
+            "color": color,
+            "inferred_color": name_inferred_color or image_inferred_color or "",
+            "color_source": color_source,
+            "style": normalize_optional_text(db_item.get("style")) or "",
+            "occasion": normalize_optional_text(db_item.get("occasion")) or "",
+            "is_public": db_item.get("is_public", False),
             "metadata": {
                 "created_at": db_item.get("created_at"),
                 "updated_at": db_item.get("updated_at"),

@@ -75,6 +75,10 @@ export async function getItems(): Promise<{ items: ClothingItem[] }> {
 }
 
 export async function addItem(item: Omit<ClothingItem, "id">): Promise<{ item: ClothingItem }> {
+  console.log("[api.ts] Frontend payload before POST /items", {
+    ...item,
+    image: item.image ? `${item.image.slice(0, 80)}...(${item.image.length} chars)` : item.image,
+  });
   return fetchAPI("/items", {
     method: "POST",
     body: JSON.stringify(item),
@@ -82,6 +86,11 @@ export async function addItem(item: Omit<ClothingItem, "id">): Promise<{ item: C
 }
 
 export async function updateItem(id: string, updates: Partial<ClothingItem>): Promise<{ item: ClothingItem }> {
+  console.log("[api.ts] Frontend payload before PUT /items", {
+    id,
+    ...updates,
+    image: updates.image ? `${updates.image.slice(0, 80)}...(${updates.image.length} chars)` : updates.image,
+  });
   return fetchAPI(`/items/${id}`, {
     method: "PUT",
     body: JSON.stringify(updates),
@@ -162,10 +171,31 @@ export async function getWishlist(): Promise<{ items: any[] }> {
 }
 
 /* --- AI OUTFIT --- */
-export async function getAIDailyOutfit(weather_data: any, preferences?: any, exclude_items?: any[]) {
+export async function getAIDailyOutfit(
+  weather_data: any,
+  preferences?: any,
+  exclude_items?: any[],
+  user_request?: string,
+  current_outfit_items?: string[]
+) {
+  console.log("[api.ts] POST /ai-outfit/today payload", {
+    weather_data,
+    preferences: preferences || {},
+    exclude_items: exclude_items || [],
+    user_request: user_request || undefined,
+    user_prompt: user_request || undefined,
+    current_outfit_items: current_outfit_items || [],
+  });
   return fetchAPI("/ai-outfit/today", {
     method: "POST",
-    body: JSON.stringify({ weather_data, preferences: preferences || {}, exclude_items: exclude_items || [] }),
+    body: JSON.stringify({
+      weather_data,
+      preferences: preferences || {},
+      exclude_items: exclude_items || [],
+      current_outfit_items: current_outfit_items || [],
+      user_request: user_request || undefined,
+      user_prompt: user_request || undefined,
+    }),
   });
 }
 
@@ -193,4 +223,4 @@ export async function recordOutfitUsage(itemIds: string[], occasion?: string): P
 
 export async function getWearHistory(days: number = 30): Promise<{ success: boolean; history: Array<{ date: string; items: any[] }> }> {
   return fetchAPI(`/usage/history?days=${days}`);
-}
+}

@@ -7,6 +7,68 @@ from supabase import create_client
 
 router = APIRouter()
 
+
+COLOR_ALIASES = {
+    "amarelo": "yellow",
+    "amarelos": "yellow",
+    "amarela": "yellow",
+    "amarelas": "yellow",
+    "azul": "blue",
+    "azuis": "blue",
+    "vermelho": "red",
+    "vermelhos": "red",
+    "vermelha": "red",
+    "vermelhas": "red",
+    "verde": "green",
+    "verdes": "green",
+    "preto": "black",
+    "pretos": "black",
+    "preta": "black",
+    "pretas": "black",
+    "branco": "white",
+    "brancos": "white",
+    "branca": "white",
+    "brancas": "white",
+    "cinza": "gray",
+    "cinzas": "gray",
+    "rosa": "pink",
+    "rosas": "pink",
+    "roxo": "purple",
+    "roxos": "purple",
+    "roxa": "purple",
+    "roxas": "purple",
+    "laranja": "orange",
+    "laranjas": "orange",
+    "marrom": "brown",
+    "marrons": "brown",
+    "bege": "beige",
+    "beges": "beige",
+    "creme": "cream",
+    "cremes": "cream",
+    "ouro": "gold",
+    "ouros": "gold",
+    "prata": "silver",
+    "pratas": "silver",
+    "grey": "gray",
+}
+
+
+def normalize_optional_text(value):
+    if value is None:
+        return None
+
+    normalized = str(value).strip().lower()
+    return normalized or None
+
+
+def normalize_optional_color(value):
+    normalized = normalize_optional_text(value)
+    if not normalized:
+        return None
+
+    return COLOR_ALIASES.get(normalized, normalized)
+
+
 # --- HELPER: Admin Client ---
 def get_admin_client():
     url = os.environ.get("SUPABASE_URL")
@@ -145,6 +207,9 @@ def get_liked_items(authorization: str = Header(None)):
                 "image": item["image"],
                 "brand": item.get("brand", ""),
                 "size": item.get("size", ""),
+                "color": normalize_optional_color(item.get("color")),
+                "style": normalize_optional_text(item.get("style")),
+                "occasion": normalize_optional_text(item.get("occasion")),
                 "materials": item.get("materials", []),
                 "seasons": item.get("seasons", []),
                 "type": item.get("type", ""),

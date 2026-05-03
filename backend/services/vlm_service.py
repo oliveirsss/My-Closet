@@ -17,6 +17,7 @@ import os
 import httpx
 import json
 import base64
+import re
 
 
 class VLMProviderEnum(str, Enum):
@@ -430,11 +431,13 @@ class LLaVAService(VLMServiceInterface):
                 color_str = self._extract_color(item)
                 layer_num = item.get("layer", 1)
                 formality_hint = {1: "Base/casual", 2: "Mid-layer", 3: "Outer/formal"}.get(layer_num, "")
+                score = item.get("score", 0) or 0
                 wardrobe_desc += (
                     f"- ID: {short_id}, Nome: {item.get('name')}, "
                     f"Tipo: {item.get('type')}, "
                     f"Cor: {color_str or 'desconhecida'}, "
-                    f"Camada: {formality_hint}\n"
+                    f"Camada: {formality_hint}, "
+                    f"Score: {score:.0f}\n"
                 )
                 valid_items.append(short_id)
 
@@ -506,10 +509,12 @@ PECAS_EM_FALTA: [lista categorias em falta separadas por vírgula, ou "Nenhuma"]
                 f.write(f"\\n--- REQ PROMPT ---\\n{req_prompt}\\n--- VLM TEXT ---\\n{vlm_text}\\n--- VALID ITEMS ---\\n{valid_items}\\n")
             
             # 4. Naive parsing to extract IDs
-            import re
             vlm_text_clean = vlm_text.replace("\\\\", "")
-            picked_short_items = [uid for uid in valid_items if uid in vlm_text_clean]
-            picked_real_items = [item_mapping[uid] for uid in picked_short_items]
+            picked_short_items = []
+            for uid in valid_items:
+                if re.search(rf"\b{re.escape(uid)}\b", vlm_text_clean):
+                    picked_short_items.append(uid)
+            picked_real_items = [item_mapping[uid] for uid in picked_short_items if uid in item_mapping]
             
             # Clean up output text so user just sees the name of the items
             clean_reasoning = vlm_text_clean
@@ -524,9 +529,16 @@ PECAS_EM_FALTA: [lista categorias em falta separadas por vírgula, ou "Nenhuma"]
             
             return VLMResponse(
                 success=True,
-                outfit_items=picked_real_items if picked_real_items else [item_mapping[uid] for uid in valid_items[:3]],
+                outfit_items=picked_real_items,
                 reasoning=clean_reasoning,
-                confidence_score=0.9
+                confidence_score=0.9,
+                metadata={
+                    "provider": self.provider.value,
+                    "model": self.model_name,
+                    "raw_response": vlm_text,
+                    "image_count": len(images_to_send),
+                    "image_preprocessing": "active",
+                },
             )
             
         except Exception as e:
@@ -606,13 +618,20 @@ OBRIGATORIAMENTE lista os IDs (ex: ITEM_1) no texto."""
     ) -> List[VLMResponse]:
         """Generate alternative outfit suggestions using external LLaVA."""
         try:
+            if not all_wardrobe_items:
+                return [self.format_error_response("No wardrobe items available")]
+
             responses = []
-            for _ in range(num_alternatives):
+            window_size = min(4, len(all_wardrobe_items))
+            for index in range(num_alternatives):
+                start_idx = (index * 2) % len(all_wardrobe_items)
+                rotated_items = all_wardrobe_items[start_idx:] + all_wardrobe_items[:start_idx]
+                outfit_ids = [item["id"] for item in rotated_items[:window_size]]
                 responses.append(
                     VLMResponse(
                         success=True,
-                        outfit_items=[i["id"] for i in all_wardrobe_items[:2]],
-                        reasoning="Alternative chosen via LLaVa API.",
+                        outfit_items=outfit_ids,
+                        reasoning=f"Alternative {index + 1} chosen with different candidates.",
                         confidence_score=0.75
                     )
                 )
@@ -664,7 +683,13 @@ class MockVLMService(VLMServiceInterface):
             outfit_items=mock_items,
             reasoning="Mock recommendation: Selected items based on weather and wardrobe availability",
             confidence_score=0.85,
-            metadata={"model": "mock", "response_time_ms": 50},
+            metadata={
+                "provider": self.provider.value,
+                "model": "mock",
+                "response_time_ms": 50,
+                "raw_response": "",
+                "image_preprocessing": "inactive",
+            },
         )
 
     async def recommend_travel_outfits(
@@ -705,6 +730,9 @@ class MockVLMService(VLMServiceInterface):
         prompt_template: Optional[str] = None,
     ) -> List[VLMResponse]:
         """Return mock alternative outfit suggestions."""
+        if not all_wardrobe_items:
+            return [self.format_error_response("No wardrobe items available")]
+
         responses = []
         for i in range(num_alternatives):
             # Rotate through wardrobe items for different alternatives

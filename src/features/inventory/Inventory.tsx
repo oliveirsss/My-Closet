@@ -470,7 +470,7 @@ export function Inventory({
                       item={item}
                     />
                   )}
-                  {item.seasons.includes("Inverno") && (
+                  {(item.seasons || []).includes("Inverno") && (
                     <Badge className="bg-white/90 text-blue-600 hover:bg-white">
                       <Droplet className="h-3 w-3" />
                     </Badge>
@@ -589,7 +589,7 @@ export function Inventory({
               justifyContent: "center",
               cursor: "pointer",
               boxShadow: "0 10px 30px rgba(16, 185, 129, 0.4)",
-              zIndex: 10000,
+              zIndex: 40,
               transition: "all 0.3s ease",
             }}
             onMouseEnter={(e) => {

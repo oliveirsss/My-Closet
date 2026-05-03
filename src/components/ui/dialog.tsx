@@ -6,10 +6,41 @@ import { XIcon } from "lucide-react@0.487.0";
 
 import { cn } from "./utils";
 
+function unlockBodyPointerEventsIfNoDialog() {
+  if (typeof document === "undefined") return;
+
+  window.setTimeout(() => {
+    const openDialog = document.querySelector(
+      '[data-slot="dialog-content"][data-state="open"], [data-slot="dialog-overlay"][data-state="open"]',
+    );
+
+    if (!openDialog) {
+      document.body.style.removeProperty("pointer-events");
+    }
+  }, 0);
+}
+
 function Dialog({
+  open,
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />;
+  React.useEffect(() => {
+    if (open === false) unlockBodyPointerEventsIfNoDialog();
+    return () => unlockBodyPointerEventsIfNoDialog();
+  }, [open]);
+
+  return (
+    <DialogPrimitive.Root
+      data-slot="dialog"
+      open={open}
+      onOpenChange={(nextOpen) => {
+        onOpenChange?.(nextOpen);
+        if (!nextOpen) unlockBodyPointerEventsIfNoDialog();
+      }}
+      {...props}
+    />
+  );
 }
 
 function DialogTrigger({
