@@ -201,26 +201,51 @@ export async function getAIDailyOutfit(
 
 export async function getAITravelOutfits(payload: {
   destination: string,
-  start_date: string,
-  end_date: string,
+  days?: number,
+  start_date?: string,
+  end_date?: string,
   luggage_limit?: number,
   preferences?: any,
-  exclude_items?: string[]
+  exclude_items?: string[],
+  weather_by_day?: any[]
 }) {
-  return fetchAPI("/ai-outfit/travel", {
+  return fetchAPI("/ai-outfit/travel-plan", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
 /* --- USAGE HISTORY --- */
-export async function recordOutfitUsage(itemIds: string[], occasion?: string): Promise<{ success: boolean; recorded: number }> {
-  return fetchAPI("/usage/record", {
+export type WearHistoryEntry = {
+  date: string;
+  outfit_id?: string | null;
+  usage_history_id?: string | null;
+  source?: string | null;
+  item_ids?: string[];
+  items: ClothingItem[];
+};
+
+export async function saveOutfitUsage(
+  itemIds: string[],
+  source: string = "ai_suggestion",
+): Promise<{
+  success: boolean;
+  duplicate?: boolean;
+  outfit: { id?: string | null; source?: string | null; used_at?: string; items: ClothingItem[]; item_ids: string[] };
+  usage_history_id?: string | null;
+}> {
+  return fetchAPI("/outfits/use-today", {
     method: "POST",
-    body: JSON.stringify({ item_ids: itemIds, occasion: occasion || null }),
+    body: JSON.stringify({
+      outfit_items: itemIds,
+      source,
+      used_at: new Date().toISOString(),
+    }),
   });
 }
 
-export async function getWearHistory(days: number = 30): Promise<{ success: boolean; history: Array<{ date: string; items: any[] }> }> {
+export const recordOutfitUsage = saveOutfitUsage;
+
+export async function getWearHistory(days: number = 30): Promise<{ success: boolean; history: WearHistoryEntry[] }> {
   return fetchAPI(`/usage/history?days=${days}`);
 }

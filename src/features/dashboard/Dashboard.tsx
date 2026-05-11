@@ -41,6 +41,7 @@ import {
 // API
 import { supabase } from "../../lib/supabase";
 import * as api from "../../services/api";
+import type { WearHistoryEntry } from "../../services/api";
 
 // --- CONFIGURAÇÃO DA API ---
 const API_KEY = import.meta.env.VITE_OPENWEATHER_API_KEY || "";
@@ -101,9 +102,10 @@ export function Dashboard({
   // Wear confirmation feedback
   const [wearConfirmed, setWearConfirmed] = useState(false);
   const [wearLoading, setWearLoading] = useState(false);
+  const [wearError, setWearError] = useState<string | null>(null);
 
   // Wear history (loaded on demand)
-  const [wearHistory, setWearHistory] = useState<Array<{ date: string; items: any[] }> | null>(null);
+  const [wearHistory, setWearHistory] = useState<WearHistoryEntry[] | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
 
   // 2. Carregar Perfil (Direto do Supabase para ser mais robusto)
@@ -307,38 +309,78 @@ export function Dashboard({
     console.log("[Dashboard] daily_suggestion_item_ids", currentOutfitItemIds);
   }, [currentOutfitItemIds.join(",")]);
 
+  const refreshHistory = async (): Promise<WearHistoryEntry[]> => {
+    setHistoryLoading(true);
+    try {
+      const res = await api.getWearHistory(30);
+      const history = res.history || [];
+      setWearHistory(history);
+      console.log("history_after_refresh", history);
+      console.log("[Dashboard] refreshed_history_count", history.length);
+      return history;
+    } catch (e) {
+      console.error('Erro ao carregar histórico:', e);
+      setWearHistory([]);
+      return [];
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const historyContainsOutfit = (history: WearHistoryEntry[], itemIds: string[]) => {
+    const target = [...itemIds].sort().join(",");
+    return history.some(entry => {
+      const entryIds = (entry.item_ids && entry.item_ids.length > 0)
+        ? entry.item_ids
+        : (entry.items || []).map(item => item.id);
+      return [...entryIds].sort().join(",") === target;
+    });
+  };
+
   const handleWearConfirm = async () => {
     if (wearLoading || wearConfirmed || currentOutfitItemIds.length === 0) return;
     setWearLoading(true);
+    setWearError(null);
     try {
-      await api.recordOutfitUsage(currentOutfitItemIds);
+      const currentSuggestionItems = aiOutfitItems || [];
+      const itemIds = currentSuggestionItems.map(item => item.id).filter(Boolean);
+      console.log("use_today_clicked", currentSuggestionItems);
+      console.log("saving_outfit_item_ids", itemIds);
+      const saved = await api.saveOutfitUsage(itemIds, "ai_suggestion");
+      console.log("save_outfit_response", saved);
+      console.log("[Dashboard] saved_outfit_id", saved.outfit?.id);
+      console.log("[Dashboard] usage_history_id", saved.usage_history_id);
+      const history = await refreshHistory();
+      if (!saved.success || !historyContainsOutfit(history, itemIds)) {
+        throw new Error("Saved outfit was not returned by history refresh");
+      }
       setWearConfirmed(true);
-      // Refresh history if visible
-      if (wearHistory !== null) loadHistory();
     } catch (e) {
       console.error('Erro ao registar uso:', e);
+      setWearConfirmed(false);
+      setWearError("Não foi possível guardar o outfit. Tenta novamente.");
     } finally {
       setWearLoading(false);
     }
   };
 
   const loadHistory = async () => {
-    setHistoryLoading(true);
-    try {
-      const res = await api.getWearHistory(30);
-      setWearHistory(res.history || []);
-    } catch (e) {
-      console.error('Erro ao carregar histórico:', e);
-      setWearHistory([]);
-    } finally {
-      setHistoryLoading(false);
-    }
+    await refreshHistory();
   };
 
   const handleAcceptAiOutfit = (outfitItems: ClothingItem[]) => {
     console.log("[Dashboard] accepted_suggestion_item_ids", outfitItems.map(item => item.id));
     setAiOutfitItems(outfitItems);
     setWearConfirmed(false);
+    setWearError(null);
+  };
+
+  const handleReuseHistoryOutfit = (entry: WearHistoryEntry) => {
+    const reusedItems = (entry.items || []) as ClothingItem[];
+    console.log("[Dashboard] reuse_history_item_ids", reusedItems.map(item => item.id));
+    setAiOutfitItems(reusedItems);
+    setWearConfirmed(false);
+    setWearError(null);
   };
 
   const cleanItems = items.filter((item) => item.status === "clean").length;
@@ -563,6 +605,11 @@ export function Dashboard({
                 <><CheckCircle className="w-4 h-4" /> Usei este outfit hoje!</>
               )}
             </button>
+            {wearError && (
+              <span className="text-sm font-medium text-red-600">
+                {wearError}
+              </span>
+            )}
 
             <button
               onClick={() => wearHistory === null ? loadHistory() : setWearHistory(null)}
@@ -587,16 +634,47 @@ export function Dashboard({
               ) : (
                 <div className="divide-y divide-stone-100 max-h-72 overflow-y-auto">
                   {wearHistory.map(entry => (
-                    <div key={entry.date} className="px-4 py-3 flex items-start gap-4">
-                      <span className="text-xs font-semibold text-stone-500 min-w-[4.5rem] pt-0.5">
-                        {new Date(entry.date + 'T12:00:00').toLocaleDateString('pt-PT', { weekday: 'short', day: 'numeric', month: 'short' })}
-                      </span>
-                      <div className="flex flex-wrap gap-2">
-                        {entry.items.map((item, idx) => (
-                          <span key={idx} className="inline-flex items-center gap-1 text-xs bg-emerald-50 text-emerald-800 border border-emerald-100 px-2 py-1 rounded-full">
-                            {item.name}
+                    <div key={`${entry.date}-${entry.outfit_id || entry.usage_history_id || entry.item_ids?.join('-')}`} className="px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
+                      <div className="flex items-center gap-3 min-w-[8.5rem]">
+                        <span className="text-xs font-semibold text-stone-500">
+                          {new Date(entry.date + 'T12:00:00').toLocaleDateString('pt-PT', { weekday: 'short', day: 'numeric', month: 'short' })}
+                        </span>
+                        {entry.source && (
+                          <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full">
+                            {entry.source === 'ai_suggestion' ? 'AI suggestion' : entry.source}
                           </span>
-                        ))}
+                        )}
+                      </div>
+
+                      <div className="flex flex-1 items-center justify-between gap-3">
+                        <div className="flex flex-wrap gap-2">
+                          {entry.items.map((item, idx) => (
+                            <button
+                              key={`${item.id}-${idx}`}
+                              type="button"
+                              onClick={() => onViewItem(item as ClothingItem)}
+                              className="inline-flex items-center gap-2 text-xs bg-white text-stone-700 border border-stone-200 px-2 py-1 rounded-lg hover:border-emerald-200 hover:bg-emerald-50 transition-colors"
+                            >
+                              {item.image ? (
+                                <img
+                                  src={api.getAssetUrl(item.image)}
+                                  alt={item.name}
+                                  className="w-7 h-7 rounded-md object-cover bg-stone-100"
+                                />
+                              ) : (
+                                <span className="w-7 h-7 rounded-md bg-stone-100 border border-stone-200" />
+                              )}
+                              <span>{item.name}</span>
+                            </button>
+                          ))}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleReuseHistoryOutfit(entry)}
+                          className="shrink-0 text-xs font-semibold text-emerald-700 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 px-3 py-2 rounded-lg transition-colors"
+                        >
+                          Usar novamente
+                        </button>
                       </div>
                     </div>
                   ))}

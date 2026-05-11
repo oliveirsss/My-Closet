@@ -2,10 +2,8 @@ import { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/ui/dialog';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
-import { Card } from '../../components/ui/card';
 import { ClothingItem } from '../../types';
-import { Plane, MapPin, Luggage, Calendar as CalendarIcon, CloudRain, Sun, Wind } from 'lucide-react';
-import { Badge } from '../../components/ui/badge';
+import { Plane, Luggage, CloudRain, Sun, Wind } from 'lucide-react';
 import * as api from '../../services/api';
 import { Sparkles, RefreshCw } from 'lucide-react';
 
@@ -17,15 +15,28 @@ interface TravelPlannerDialogProps {
   items: ClothingItem[];
 }
 
-// Helper para agrupar array em chunks (dias)
-const chunk = (arr: any[], size: number) =>
-  Array.from({ length: Math.ceil(arr.length / size) }, (_, i) =>
-    arr.slice(i * size, i * size + size)
-  );
+const sectionLabels: Record<string, string> = {
+  base_layer: "Base",
+  insulation_layer: "Isolamento",
+  pants: "Calças",
+  outer_layer: "Casaco",
+  shoes: "Calçado",
+  accessories: "Acessórios",
+};
 
-export function TravelPlannerDialog({ open, onOpenChange, items }: TravelPlannerDialogProps) {
+const sectionOrder = ["base_layer", "insulation_layer", "pants", "outer_layer", "shoes", "accessories"];
+
+function groupItemsBySection(items: any[]) {
+  return items.reduce((groups: Record<string, any[]>, item: any) => {
+    const section = item.section || "base_layer";
+    groups[section] = groups[section] || [];
+    groups[section].push(item);
+    return groups;
+  }, {});
+}
+
+export function TravelPlannerDialog({ open, onOpenChange, items: _items }: TravelPlannerDialogProps) {
   const [city, setCity] = useState('');
-  const [startDate, setStartDate] = useState('');
   const [duration, setDuration] = useState('3'); // Dias
   const [loading, setLoading] = useState(false);
   const [tripPlan, setTripPlan] = useState<any>(null);
@@ -75,40 +86,37 @@ export function TravelPlannerDialog({ open, onOpenChange, items }: TravelPlanner
       setError('Por favor, insira o nome de uma cidade.');
       return;
     }
+    const numDays = parseInt(duration) || 3;
+    if (numDays < 1 || numDays > 5) {
+      setError('A duração deve estar entre 1 e 5 dias.');
+      return;
+    }
     setLoading(true);
     setError('');
     setShowSuggestions(false);
     setTripPlan(null);
 
-    const startDateObj = new Date();
-    const endDateObj = new Date(startDateObj);
-    const numDays = Math.min(parseInt(duration) || 3, 5);
-    endDateObj.setDate(startDateObj.getDate() + numDays - 1);
-
     try {
       const response = await api.getAITravelOutfits({
         destination: city,
-        start_date: startDateObj.toISOString(),
-        end_date: endDateObj.toISOString(),
-        luggage_limit: 15
+        days: numDays,
+        preferences: { style: "casual" },
+        luggage_limit: 15,
       });
 
       if (response.success && response.daily_outfits) {
-        // Mapear resposta para formato interno da nossa UI
-        const dailyOutfits = response.daily_outfits.map((dayPlan: any, index: number) => {
-          const items = dayPlan.items || [];
+        const dailyOutfits = response.daily_outfits.map((dayPlan: any) => {
+          const items = dayPlan.outfit?.items || [];
           return {
-            day: index + 1,
-            weather: { temperature: 20, rain: false, windSpeed: 0, humidity: 50 }, // fallback estático
-            outfit: {
-              baseLayer: { items: [items.find((i:any) => i.layer === 1) || items[0]].filter(Boolean).map(item => ({ item, reasoning: "" })), reasoning: "", isMissing: false },
-              insulationLayer: { items: [items.find((i:any) => i.layer === 2) || items[1]].filter(Boolean).map(item => ({ item, reasoning: "" })), reasoning: "", isMissing: false },
-              outerLayer: { items: [items.find((i:any) => i.layer === 3)].filter(Boolean).map(item => ({ item, reasoning: "" })), reasoning: "", isMissing: false }
-            }
+            day: dayPlan.day,
+            weather: dayPlan.weather || { temp: 18, condition: "cloudy" },
+            items,
+            groupedItems: groupItemsBySection(items),
+            reasoning: dayPlan.outfit?.reasoning || "",
           };
         });
 
-        const packingList = (response.packing_list || []).map((item: any) => ({
+        const packingList = (response.packing_items || response.packing_list || []).map((item: any) => ({
           item: item, count: 1
         }));
 
@@ -117,6 +125,7 @@ export function TravelPlannerDialog({ open, onOpenChange, items }: TravelPlanner
           country: "",
           dailyOutfits,
           packingList,
+          warnings: response.warnings || [],
           isAI: true
         });
       } else {
@@ -211,11 +220,16 @@ export function TravelPlannerDialog({ open, onOpenChange, items }: TravelPlanner
                 <Luggage className="h-5 w-5 text-emerald-600" />
                 <span className="tracking-tight">A tua Mala de Viagem</span>
               </h3>
+              {tripPlan.warnings?.length > 0 && (
+                <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  {tripPlan.warnings.join(' ')}
+                </div>
+              )}
               <div className="grid grid-cols-5 gap-3 w-full">
                 {tripPlan.packingList.map((entry: any) => (
                   <div key={entry.item.id} className="group relative flex flex-col items-center">
                     <div className="w-full aspect-[4/5] bg-white rounded-2xl border border-stone-100 shadow-sm group-hover:shadow-md transition-all duration-300 overflow-hidden mb-2 p-3 flex items-center justify-center relative">
-                      <img src={entry.item.image} className="w-full h-full object-contain transform group-hover:scale-105 transition-transform" alt="" />
+                      <img src={api.getAssetUrl(entry.item.image)} className="w-full h-full object-contain transform group-hover:scale-105 transition-transform" alt="" />
                       {entry.count > 1 && (
                         <span className="absolute top-2 right-2 bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200">
                           {entry.count}x
@@ -239,24 +253,29 @@ export function TravelPlannerDialog({ open, onOpenChange, items }: TravelPlanner
                     <div className="flex items-center justify-between mb-2">
                       <span className="font-medium text-emerald-800">Dia {dayPlan.day}</span>
                       <div className="flex items-center gap-2 text-sm text-stone-600">
-                        {dayPlan.weather.rain ? <CloudRain className="h-4 w-4 text-blue-400" /> : <Sun className="h-4 w-4 text-amber-400" />}
-                        <span>{Math.round(dayPlan.weather.temperature)}°C</span>
-                        {dayPlan.weather.windSpeed > 10 && <Wind className="h-4 w-4 text-stone-400" />}
+                        {String(dayPlan.weather.condition || '').includes('rain') ? <CloudRain className="h-4 w-4 text-blue-400" /> : <Sun className="h-4 w-4 text-amber-400" />}
+                        <span>{Math.round(dayPlan.weather.temp ?? dayPlan.weather.temperature ?? 18)}°C</span>
+                        {Number(dayPlan.weather.wind_speed || dayPlan.weather.windSpeed || 0) > 10 && <Wind className="h-4 w-4 text-stone-400" />}
                       </div>
                     </div>
-                    <div className="flex gap-2 text-sm text-stone-500">
-                      <span className={dayPlan.outfit.baseLayer.isMissing ? "text-red-400" : ""}>
-                        {dayPlan.outfit.baseLayer.items[0]?.item.name || "Sem Base"}
-                      </span>
-                      <span>+</span>
-                      <span>{dayPlan.outfit.insulationLayer.items[0]?.item.name || "Sem Isolamento"}</span>
-                      {dayPlan.outfit.outerLayer.items.length > 0 && (
-                        <>
-                          <span>+</span>
-                          <span>{dayPlan.outfit.outerLayer.items[0]?.item.name}</span>
-                        </>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                      {sectionOrder.flatMap((section) =>
+                        (dayPlan.groupedItems[section] || []).map((item: any) => (
+                          <div key={`${dayPlan.day}-${item.id}`} className="flex items-center gap-2 rounded-md border border-stone-100 bg-stone-50 p-2">
+                            <div className="h-12 w-12 shrink-0 rounded bg-white border border-stone-100 overflow-hidden flex items-center justify-center">
+                              <img src={api.getAssetUrl(item.image)} alt="" className="h-full w-full object-contain p-1" />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-[10px] uppercase tracking-wide text-stone-400">{sectionLabels[section]}</p>
+                              <p className="truncate text-xs font-medium text-stone-700">{item.name}</p>
+                            </div>
+                          </div>
+                        ))
                       )}
                     </div>
+                    {dayPlan.reasoning && (
+                      <p className="mt-3 text-xs leading-relaxed text-stone-500">{dayPlan.reasoning}</p>
+                    )}
                   </div>
                 ))}
               </div>
@@ -266,18 +285,5 @@ export function TravelPlannerDialog({ open, onOpenChange, items }: TravelPlanner
         )}
       </DialogContent>
     </Dialog>
-  );
-}
-
-function PackItem({ item, label }: any) {
-  if (!item) return null;
-  return (
-    <Card className="p-2 flex flex-col items-center text-center border-stone-200 shadow-sm">
-      <div className="w-full aspect-square bg-stone-50 rounded mb-2 overflow-hidden flex items-center justify-center">
-        <img src={item.image} alt={item.name} className="w-full h-full object-contain p-1" />
-      </div>
-      <Badge variant="outline" className="mb-1 text-[10px]">{label}</Badge>
-      <p className="text-xs font-medium text-stone-700 truncate w-full">{item.name}</p>
-    </Card>
   );
 }

@@ -41,7 +41,7 @@ import json
 import random
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from services.data_preparation_service import DataPreparationService
 from services.prompt_service import PromptService
@@ -199,6 +199,28 @@ class RecommendationService:
                 only_clean=False,
                 exclude_item_ids=None,
             )
+            replace_sections = self._normalize_candidate_sections(
+                parsed_constraints.get("replace_sections") or []
+            )
+            strict_replace_mode = (
+                parsed_constraints.get("mode") == "replace_piece"
+                or bool(replace_sections)
+            )
+            if strict_replace_mode:
+                if not current_outfit_items:
+                    return self._create_error_response(
+                        "I need the current outfit to replace only one piece."
+                    )
+                return self._build_strict_replace_response(
+                    wardrobe_items=wardrobe_for_candidates,
+                    current_outfit_item_ids=current_outfit_items,
+                    replace_sections=replace_sections,
+                    parsed_constraints=parsed_constraints,
+                    weather=candidate_weather,
+                    exclude_items=effective_exclude_items,
+                    user_request_text=user_request_text or "",
+                )
+
             candidate_result = self.candidate_outfit_service.generate_candidate_outfits(
                 user_id=user_id,
                 wardrobe_items=wardrobe_for_candidates,
@@ -206,6 +228,7 @@ class RecommendationService:
                 parsed_intent=parsed_constraints,
                 current_outfit_items=current_outfit_items,
                 exclude_items=effective_exclude_items,
+                max_candidates=12,
             )
 
             if not candidate_result.get("success"):
@@ -214,12 +237,25 @@ class RecommendationService:
                 )
 
             candidates = candidate_result.get("candidates", [])
+            llava_candidates = self._prepare_candidates_for_llava(
+                candidates=candidates,
+                parsed_intent=parsed_constraints,
+                max_candidates=3,
+            )
+            if not llava_candidates:
+                return self._create_error_response(
+                    "Could not find candidates that satisfy the hard request constraints."
+                )
             print(
                 "[CandidateSelection] generated_candidate_ids="
                 f"{[candidate.get('candidate_id') for candidate in candidates]}"
             )
+            print(
+                "[CandidateSelection] llava_candidate_ids="
+                f"{[candidate.get('candidate_id') for candidate in llava_candidates]}"
+            )
             selection = await self.select_best_candidate_with_llava(
-                candidates=candidates,
+                candidates=llava_candidates,
                 wardrobe_items=wardrobe_for_candidates,
                 user_request=user_request_text or "",
                 weather_data=candidate_weather,
@@ -268,11 +304,21 @@ class RecommendationService:
                     "generated_candidate_ids": [
                         candidate.get("candidate_id") for candidate in candidates
                     ],
+                    "llava_candidate_ids": [
+                        candidate.get("candidate_id") for candidate in llava_candidates
+                    ],
                     "raw_llava_candidate_response": selection.get("raw_response"),
                     "selected_candidate_reasoning": selection.get("reasoning"),
                     "selected_candidate_id": selected_candidate_id,
                     "final_item_ids": final_item_ids,
+                    "top_candidate_by_score": selection.get("top_candidate_by_score"),
+                    "llava_selected": selection.get("llava_selected"),
+                    "score_gap": selection.get("score_gap"),
+                    "final_selected": selection.get("final_selected"),
+                    "selection_reason": selection.get("selection_reason"),
+                    "llava_confidence": selection.get("confidence"),
                     "candidates": candidates,
+                    "llava_candidates": llava_candidates,
                 },
                 "timestamp": datetime.now().isoformat(),
             }
@@ -771,6 +817,7 @@ class RecommendationService:
             key=lambda candidate: candidate.get("score", 0),
             reverse=True,
         )[0]
+        top_candidate_id = str(fallback_candidate.get("candidate_id"))
         prompt = self._build_candidate_selection_prompt(
             candidates=candidates,
             user_request=user_request,
@@ -805,6 +852,12 @@ class RecommendationService:
                 "reasoning": "LLaVA failed, selected the highest-scored candidate.",
                 "raw_response": str(exc),
                 "model_used": "llava_candidate_fallback",
+                "top_candidate_by_score": top_candidate_id,
+                "llava_selected": None,
+                "score_gap": 0,
+                "final_selected": top_candidate_id,
+                "selection_reason": "llava_exception",
+                "confidence": 0.0,
             }
 
         raw_response = (
@@ -821,10 +874,17 @@ class RecommendationService:
                 "reasoning": "LLaVA failed, selected the highest-scored candidate.",
                 "raw_response": raw_response or vlm_response.error,
                 "model_used": "llava_candidate_fallback",
+                "top_candidate_by_score": top_candidate_id,
+                "llava_selected": None,
+                "score_gap": 0,
+                "final_selected": top_candidate_id,
+                "selection_reason": "llava_failed",
+                "confidence": 0.0,
             }
 
         parsed = self._parse_candidate_selection_json(raw_response)
         selected_candidate_id = str(parsed.get("selected_candidate") or "").strip()
+        confidence = self._parse_llava_confidence(parsed.get("confidence"))
         if selected_candidate_id not in candidate_by_id:
             print(
                 "[CandidateSelection] invalid_selected_candidate "
@@ -836,14 +896,71 @@ class RecommendationService:
                 "reasoning": "LLaVA returned an invalid candidate, selected the highest-scored candidate.",
                 "raw_response": raw_response,
                 "model_used": "llava_candidate_fallback",
+                "top_candidate_by_score": top_candidate_id,
+                "llava_selected": selected_candidate_id or None,
+                "score_gap": 0,
+                "final_selected": top_candidate_id,
+                "selection_reason": "invalid_candidate",
+                "confidence": confidence,
+            }
+
+        selected_candidate = candidate_by_id[selected_candidate_id]
+        score_gap = round(
+            float(fallback_candidate.get("score", 0) or 0)
+            - float(selected_candidate.get("score", 0) or 0),
+            3,
+        )
+        if confidence < 0.65:
+            print(
+                "[CandidateSelection] low_confidence_fallback "
+                f"selected={selected_candidate_id} confidence={confidence} "
+                f"fallback={top_candidate_id}"
+            )
+            return {
+                "candidate": fallback_candidate,
+                "selected_candidate_id": fallback_candidate.get("candidate_id"),
+                "reasoning": str(parsed.get("reasoning") or "").strip(),
+                "raw_response": raw_response,
+                "model_used": "candidate_score_fallback",
+                "top_candidate_by_score": top_candidate_id,
+                "llava_selected": selected_candidate_id,
+                "score_gap": score_gap,
+                "final_selected": top_candidate_id,
+                "selection_reason": "low_confidence",
+                "confidence": confidence,
+            }
+        if score_gap > 15:
+            print(
+                "[CandidateSelection] score_override "
+                f"top={top_candidate_id} selected={selected_candidate_id} "
+                f"score_gap={score_gap}"
+            )
+            return {
+                "candidate": fallback_candidate,
+                "selected_candidate_id": fallback_candidate.get("candidate_id"),
+                "reasoning": str(parsed.get("reasoning") or "").strip(),
+                "raw_response": raw_response,
+                "model_used": "candidate_score_override",
+                "top_candidate_by_score": top_candidate_id,
+                "llava_selected": selected_candidate_id,
+                "score_gap": score_gap,
+                "final_selected": top_candidate_id,
+                "selection_reason": "score_override",
+                "confidence": confidence,
             }
 
         return {
-            "candidate": candidate_by_id[selected_candidate_id],
+            "candidate": selected_candidate,
             "selected_candidate_id": selected_candidate_id,
             "reasoning": str(parsed.get("reasoning") or "").strip(),
             "raw_response": raw_response,
             "model_used": "llava_candidate_selection",
+            "top_candidate_by_score": top_candidate_id,
+            "llava_selected": selected_candidate_id,
+            "score_gap": score_gap,
+            "final_selected": selected_candidate_id,
+            "selection_reason": "llava_selected",
+            "confidence": confidence,
         }
 
     def _build_candidate_selection_prompt(
@@ -854,10 +971,20 @@ class RecommendationService:
     ) -> str:
         candidate_lines = []
         for candidate in candidates:
+            metadata = candidate.get("metadata", {}) or {}
             candidate_lines.append(f"Candidate {candidate.get('candidate_id')}:")
-            candidate_lines.append(f"Score: {candidate.get('score')}")
+            candidate_lines.append(f"Total score: {candidate.get('score')}")
             candidate_lines.append(
-                f"Diversity reason: {candidate.get('metadata', {}).get('diversity_reason', '')}"
+                f"Score explanation: {metadata.get('score_explanation', '')}"
+            )
+            candidate_lines.append(
+                f"Strengths: {', '.join(metadata.get('strengths') or []) or 'valid candidate'}"
+            )
+            candidate_lines.append(
+                f"Weaknesses: {', '.join(metadata.get('weaknesses') or []) or 'none'}"
+            )
+            candidate_lines.append(
+                f"Diversity reason: {metadata.get('diversity_reason', '')}"
             )
             for item in candidate.get("items", []):
                 candidate_lines.append(
@@ -874,11 +1001,14 @@ class RecommendationService:
 
         return f"""You are a stylist choosing the best outfit candidate.
 
+You are not choosing freely from the wardrobe. You are choosing the best candidate from already validated outfits.
 You must choose ONLY one candidate ID from the provided list.
 Do not invent items.
 Do not change items.
 Do not remove items.
 Do not select individual item IDs.
+Choose the best candidate visually and stylistically, but do not ignore hard request matches. Prefer candidates with higher score unless there is a clear visual/style reason.
+Do not prioritize visual variety over request accuracy.
 Return JSON only. No markdown. No extra text.
 
 User request:
@@ -893,7 +1023,8 @@ Candidate list:
 Required response:
 {{
   "selected_candidate": "A",
-  "reasoning": "short explanation"
+  "reasoning": "short explanation",
+  "confidence": 0.0
 }}
 """
 
@@ -915,20 +1046,211 @@ Required response:
             return {}
         return parsed if isinstance(parsed, dict) else {}
 
+    def _parse_llava_confidence(self, value: Any) -> float:
+        try:
+            confidence = float(value)
+        except (TypeError, ValueError):
+            return 0.75
+        return max(0.0, min(1.0, confidence))
+
+    def _prepare_candidates_for_llava(
+        self,
+        candidates: List[Dict[str, Any]],
+        parsed_intent: Dict[str, Any],
+        max_candidates: int = 3,
+    ) -> List[Dict[str, Any]]:
+        sorted_candidates = sorted(
+            candidates,
+            key=lambda candidate: float(candidate.get("score", 0) or 0),
+            reverse=True,
+        )
+        hard_filtered = [
+            candidate for candidate in sorted_candidates
+            if self._candidate_respects_hard_request(candidate, parsed_intent)
+        ]
+        if not hard_filtered:
+            if self._has_hard_candidate_request(parsed_intent):
+                return []
+            hard_filtered = sorted_candidates
+
+        selected: List[Dict[str, Any]] = []
+        top_score = float(hard_filtered[0].get("score", 0) or 0) if hard_filtered else 0.0
+        close_score_window = 8.0
+
+        for candidate in hard_filtered:
+            if len(selected) >= max_candidates:
+                break
+            candidate_score = float(candidate.get("score", 0) or 0)
+            if len(selected) < 2 or top_score - candidate_score <= close_score_window:
+                selected.append(candidate)
+
+        for candidate in hard_filtered:
+            if len(selected) >= max_candidates:
+                break
+            if candidate not in selected:
+                selected.append(candidate)
+
+        prepared = []
+        for index, candidate in enumerate(selected[:max_candidates]):
+            cloned = {
+                **candidate,
+                "candidate_id": chr(ord("A") + index),
+                "metadata": dict(candidate.get("metadata") or {}),
+            }
+            strengths, weaknesses = self._candidate_quality_labels(cloned, parsed_intent)
+            cloned["metadata"]["strengths"] = strengths
+            cloned["metadata"]["weaknesses"] = weaknesses
+            prepared.append(cloned)
+        return prepared
+
+    def _has_hard_candidate_request(self, parsed_intent: Dict[str, Any]) -> bool:
+        requested_style = self._normalized_requested_style(parsed_intent)
+        requested_occasion = self._normalized_requested_occasion(parsed_intent)
+        return bool(
+            parsed_intent.get("must_include_items")
+            or requested_style in {"formal", "classic", "elegant", "streetwear"}
+            or requested_occasion in {"work", "trabalho", "dinner", "jantar"}
+        )
+
+    def _candidate_respects_hard_request(
+        self,
+        candidate: Dict[str, Any],
+        parsed_intent: Dict[str, Any],
+    ) -> bool:
+        metadata = candidate.get("metadata") or {}
+        if metadata.get("request_match") is False:
+            return False
+
+        requested_style = self._normalized_requested_style(parsed_intent)
+        requested_occasion = self._normalized_requested_occasion(parsed_intent)
+        if requested_style in {"formal", "classic", "elegant"}:
+            return self._candidate_average_formality(candidate) >= 3.6
+        if requested_style == "streetwear":
+            return self._candidate_has_style(candidate, {"streetwear", "casual", "sporty"})
+        if requested_occasion in {"work", "trabalho", "dinner", "jantar"}:
+            return self._candidate_average_formality(candidate) >= 3.2
+        return True
+
+    def _candidate_quality_labels(
+        self,
+        candidate: Dict[str, Any],
+        parsed_intent: Dict[str, Any],
+    ) -> Tuple[List[str], List[str]]:
+        breakdown = (candidate.get("metadata") or {}).get("score_breakdown") or {}
+        strengths = []
+        weaknesses = []
+
+        if breakdown.get("request_match", 0) >= 24:
+            strengths.append("strong request match")
+        else:
+            weaknesses.append("weaker request match")
+        if breakdown.get("formality", 0) >= 12:
+            strengths.append("aligned formality")
+        elif self._normalized_requested_style(parsed_intent) in {"formal", "classic", "elegant"}:
+            weaknesses.append("casual pieces reduce formality")
+        if breakdown.get("style_consistency", 0) >= 12:
+            strengths.append("consistent style")
+        elif breakdown.get("style_consistency", 0) < 9:
+            weaknesses.append("mixed style signals")
+        if breakdown.get("color_harmony", 0) >= 9:
+            strengths.append("good color harmony")
+        elif breakdown.get("color_harmony", 0) < 6:
+            weaknesses.append("less cohesive colors")
+        if breakdown.get("weather", 0) >= 9:
+            strengths.append("good weather fit")
+        elif breakdown.get("weather", 0) < 7:
+            weaknesses.append("weaker weather fit")
+        if breakdown.get("completeness", 0) >= 12:
+            strengths.append("complete outfit")
+        if breakdown.get("section_correctness", 0) >= 10:
+            strengths.append("correct sections")
+        return strengths[:4], weaknesses[:3]
+
+    def _normalized_requested_style(self, parsed_intent: Dict[str, Any]) -> str:
+        style = (
+            parsed_intent.get("requested_style")
+            or self._first_list_value(parsed_intent.get("style"))
+            or self._first_list_value(parsed_intent.get("requested_styles"))
+        )
+        text = self.candidate_outfit_service._normalize_text(style)
+        if text in {"elegante", "elegant"}:
+            return "elegant"
+        if text in {"classico", "classica", "classic"}:
+            return "classic"
+        if text in {"desportivo", "sport", "sporty"}:
+            return "sporty"
+        return text
+
+    def _normalized_requested_occasion(self, parsed_intent: Dict[str, Any]) -> str:
+        occasion = (
+            parsed_intent.get("requested_occasion")
+            or self._first_list_value(parsed_intent.get("occasion"))
+            or self._first_list_value(parsed_intent.get("requested_occasions"))
+        )
+        return self.candidate_outfit_service._normalize_text(occasion)
+
+    def _first_list_value(self, value: Any) -> Any:
+        if isinstance(value, list):
+            return value[0] if value else None
+        return value
+
+    def _candidate_average_formality(self, candidate: Dict[str, Any]) -> float:
+        values = [
+            self._candidate_item_formality(item)
+            for item in candidate.get("items", [])
+        ]
+        return sum(values) / len(values) if values else 0.0
+
+    def _candidate_has_style(self, candidate: Dict[str, Any], accepted: set) -> bool:
+        return any(
+            self._candidate_item_style_label(item) in accepted
+            for item in candidate.get("items", [])
+        )
+
+    def _candidate_item_formality(self, item: Dict[str, Any]) -> int:
+        label = self._candidate_item_style_label(item)
+        if label in {"sporty", "streetwear"}:
+            return 1
+        if label == "casual":
+            return 2
+        if label == "smart casual":
+            return 3
+        if label == "classic":
+            return 4
+        if label in {"formal", "elegant"}:
+            return 5
+        return 2
+
+    def _candidate_item_style_label(self, item: Dict[str, Any]) -> str:
+        text = self.candidate_outfit_service._normalize_text(
+            f"{item.get('style', '')} {item.get('occasion', '')} "
+            f"{item.get('name', '')} {item.get('type', '')}"
+        )
+        if any(token in text for token in ["formal", "work", "elegant", "elegante", "camisa", "shirt", "blazer"]):
+            return "formal"
+        if any(token in text for token in ["classic", "classico", "classica", "classicas"]):
+            return "classic"
+        if "smart casual" in text:
+            return "smart casual"
+        if any(token in text for token in ["streetwear", "oversized", "stussy", "jordan"]):
+            return "streetwear"
+        if any(token in text for token in ["sport", "desportivo", "running", "jersey"]):
+            return "sporty"
+        return "casual"
+
     def _build_candidate_selection_reasoning(
         self,
         selected_candidate: Dict[str, Any],
         user_request: Optional[str],
         weather_data: Dict[str, Any],
     ) -> str:
-        candidate_id = selected_candidate.get("candidate_id")
         items = selected_candidate.get("items", [])
         temp = weather_data.get("temp", weather_data.get("temperature"))
         condition = weather_data.get("condition", "current")
         weather_phrase = (
-            f"{condition} {temp}°C conditions"
+            f"{condition} {temp}°C"
             if temp is not None
-            else f"{condition} conditions"
+            else str(condition)
         )
 
         requested_mentions = self._requested_items_in_candidate(user_request, items)
@@ -940,20 +1262,53 @@ Required response:
         ])
         item_phrase = self._join_names(paired_names[:5])
         if requested_mentions:
-            request_sentence = (
-                f" because it includes {self._join_names(requested_mentions)} as requested"
-            )
+            opening = f"Criei este look com {self._join_names(requested_mentions)} como pediste"
         elif user_request:
-            request_sentence = f" because it best matches your request"
+            opening = "Criei este look para responder ao teu pedido"
         else:
-            request_sentence = ""
+            opening = "Criei este look"
 
+        result_style = self._candidate_result_style(user_request, items)
         if item_phrase:
             return (
-                f"Selected candidate {candidate_id}{request_sentence}, paired with "
-                f"{item_phrase} for {weather_phrase}."
+                f"{opening} e combinei com {item_phrase} para um resultado "
+                f"{result_style} adequado a {weather_phrase}."
             )
-        return f"Selected candidate {candidate_id}{request_sentence} for {weather_phrase}."
+        return (
+            f"{opening} para um resultado {result_style} adequado a {weather_phrase}."
+        )
+
+    def _candidate_result_style(
+        self,
+        user_request: Optional[str],
+        items: List[Dict[str, Any]],
+    ) -> str:
+        if user_request:
+            parsed = self.user_request_parser.parse_request(user_request)
+            requested_style = parsed.get("requested_style")
+            if requested_style:
+                return str(requested_style)
+        labels = []
+        for item in items:
+            text = self.candidate_outfit_service._normalize_text(
+                f"{item.get('style', '')} {item.get('occasion', '')} "
+                f"{item.get('name', '')} {item.get('type', '')}"
+            )
+            if any(token in text for token in ["formal", "work", "elegant", "elegante", "classico", "classica"]):
+                labels.append("formal")
+            elif any(token in text for token in ["streetwear", "jordan", "oversized"]):
+                labels.append("streetwear")
+            elif any(token in text for token in ["sport", "desportivo", "running", "jersey"]):
+                labels.append("sporty")
+            else:
+                labels.append("casual")
+        if labels.count("formal") >= max(1, len(labels) // 2):
+            return "formal"
+        if labels.count("streetwear") >= 2:
+            return "streetwear"
+        if labels.count("sporty") >= 2:
+            return "sporty"
+        return "casual"
 
     def _requested_items_in_candidate(
         self,
@@ -2178,6 +2533,278 @@ Required response:
 
         return True
 
+    def _normalize_candidate_section(self, section: Optional[str]) -> Optional[str]:
+        if not section:
+            return None
+        normalized = str(section).strip().lower()
+        return {
+            "base": "base_layer",
+            "top": "base_layer",
+            "tops": "base_layer",
+            "base_layer": "base_layer",
+            "insulation": "insulation_layer",
+            "mid_layer": "insulation_layer",
+            "insulation_layer": "insulation_layer",
+            "pants": "pants",
+            "trousers": "pants",
+            "jeans": "pants",
+            "outer": "outer_layer",
+            "outerwear": "outer_layer",
+            "jacket": "outer_layer",
+            "coat": "outer_layer",
+            "outer_layer": "outer_layer",
+            "shoes": "shoes",
+            "footwear": "shoes",
+            "sneakers": "shoes",
+            "accessory": "accessories",
+            "accessories": "accessories",
+            "one_item": "one_item",
+        }.get(normalized, normalized)
+
+    def _normalize_candidate_sections(self, sections: List[str]) -> List[str]:
+        normalized_sections: List[str] = []
+        for section in sections or []:
+            normalized = self._normalize_candidate_section(section)
+            if normalized and normalized not in normalized_sections:
+                normalized_sections.append(normalized)
+        return normalized_sections
+
+    def _candidate_section_for_item(self, item: Dict[str, Any]) -> str:
+        explicit_section = self._normalize_candidate_section(item.get("section"))
+        if explicit_section and explicit_section != "one_item":
+            return explicit_section
+        return self.candidate_outfit_service.get_section(item)
+
+    def _status_is_clean(self, item: Dict[str, Any]) -> bool:
+        return (
+            self.candidate_outfit_service._normalize_text(item.get("status") or "clean")
+            == "clean"
+        )
+
+    def _strict_replace_reasoning(
+        self,
+        replace_sections: List[str],
+        user_request_text: str,
+    ) -> str:
+        normalized_request = self.user_request_parser._normalize_text(user_request_text or "")
+        is_portuguese = any(
+            token in normalized_request
+            for token in [
+                "troca",
+                "muda",
+                "calca",
+                "calcas",
+                "casaco",
+                "sapatilha",
+                "sapatilhas",
+                "camisola",
+            ]
+        )
+        if is_portuguese:
+            labels = self._join_names([
+                {
+                    "pants": "as calças",
+                    "outer_layer": "o casaco",
+                    "shoes": "as sapatilhas",
+                    "insulation_layer": "a camisola",
+                    "base_layer": "a peça de cima",
+                    "accessories": "os acessórios",
+                }.get(section, section)
+                for section in replace_sections
+            ])
+            return f"Troquei apenas {labels} e mantive o resto do outfit igual."
+        labels = self._join_section_labels(replace_sections)
+        return f"I replaced only the {labels} and kept the rest of the outfit unchanged."
+
+    def _build_strict_replace_response(
+        self,
+        wardrobe_items: List[Dict[str, Any]],
+        current_outfit_item_ids: List[str],
+        replace_sections: List[str],
+        parsed_constraints: Dict[str, Any],
+        weather: Dict[str, Any],
+        exclude_items: Optional[List[str]],
+        user_request_text: str,
+    ) -> Dict[str, Any]:
+        """Replace only requested current-outfit sections and preserve every other item."""
+        wardrobe_by_id = {
+            str(item.get("id")): item
+            for item in wardrobe_items or []
+            if item.get("id")
+        }
+        requested_current_ids = [
+            str(item_id) for item_id in current_outfit_item_ids or []
+        ]
+        current_ids = [
+            str(item_id)
+            for item_id in requested_current_ids
+            if str(item_id) in wardrobe_by_id
+        ]
+        if not current_ids:
+            return self._create_error_response(
+                "I need the current outfit to replace only one piece."
+            )
+        missing_current_ids = [
+            item_id for item_id in requested_current_ids
+            if item_id not in wardrobe_by_id
+        ]
+        if missing_current_ids:
+            print(
+                "[StrictReplace] missing_current_items "
+                f"missing_current_ids={missing_current_ids}"
+            )
+            return self._create_error_response(
+                "I could not load every item in the current outfit, so I cannot replace only one piece safely."
+            )
+
+        current_sections_by_id = {
+            item_id: self._candidate_section_for_item(wardrobe_by_id[item_id])
+            for item_id in current_ids
+        }
+        current_by_section: Dict[str, List[str]] = {}
+        for item_id, section in current_sections_by_id.items():
+            current_by_section.setdefault(section, []).append(item_id)
+
+        normalized_replace_sections = self._normalize_candidate_sections(replace_sections)
+        if "one_item" in normalized_replace_sections:
+            normalized_replace_sections = [
+                section
+                for section in ["shoes", "outer_layer", "insulation_layer", "base_layer", "pants"]
+                if section in current_by_section
+            ][:1]
+        if not normalized_replace_sections:
+            requested_types = parsed_constraints.get("requested_types") or []
+            normalized_replace_sections = [
+                self._normalize_candidate_section(
+                    self.user_request_parser.TYPE_TO_SECTION.get(item_type)
+                )
+                for item_type in requested_types
+            ]
+            normalized_replace_sections = [
+                section for section in normalized_replace_sections
+                if section and section != "one_item"
+            ]
+        if not normalized_replace_sections:
+            return self._create_error_response(
+                "I need to know which piece to replace."
+            )
+
+        excluded_ids = {str(item_id) for item_id in exclude_items or []}
+        locked_item_ids = [
+            item_id for item_id in current_ids
+            if current_sections_by_id.get(item_id) not in normalized_replace_sections
+        ]
+        removed_item_ids = [
+            item_id for item_id in current_ids
+            if current_sections_by_id.get(item_id) in normalized_replace_sections
+        ]
+        selected_replacements_by_section: Dict[str, Dict[str, Any]] = {}
+        replacement_item_ids: List[str] = []
+
+        for section in normalized_replace_sections:
+            section_current_ids = set(current_by_section.get(section, []))
+            section_candidates = [
+                item for item in wardrobe_items or []
+                if str(item.get("id")) not in section_current_ids
+                and str(item.get("id")) not in excluded_ids
+                and str(item.get("id")) not in set(locked_item_ids)
+                and self._status_is_clean(item)
+                and self._candidate_section_for_item(item) == section
+            ]
+            weather_compatible, checked_temperature = (
+                self.candidate_outfit_service.filter_temperature_compatible(
+                    section_candidates,
+                    weather,
+                )
+            )
+            if checked_temperature and weather_compatible:
+                section_candidates = weather_compatible
+
+            print(
+                "[StrictReplace] section_candidates "
+                f"section={section} "
+                f"candidate_ids={[item.get('id') for item in section_candidates]} "
+                f"excluded_current_ids={list(section_current_ids)} "
+                f"excluded_ids={list(excluded_ids)}"
+            )
+            if not section_candidates:
+                debug_payload = {
+                    "mode": "strict_replace_piece",
+                    "replace_sections": normalized_replace_sections,
+                    "locked_item_ids": locked_item_ids,
+                    "removed_item_ids": removed_item_ids,
+                    "replacement_item_ids": replacement_item_ids,
+                    "final_item_ids": current_ids,
+                }
+                print(f"[StrictReplace] {json.dumps(debug_payload, ensure_ascii=False)}")
+                return self._create_error_response(
+                    self._replacement_failure_message(section)
+                )
+
+            sorted_candidates = self.candidate_outfit_service._sort_items(
+                section_candidates,
+                parsed_constraints,
+            )
+            selected = sorted_candidates[0]
+            selected_id = str(selected.get("id"))
+            selected_replacements_by_section[section] = selected
+            replacement_item_ids.append(selected_id)
+
+        final_items: List[Dict[str, Any]] = []
+        inserted_sections = set()
+        for item_id in current_ids:
+            section = current_sections_by_id.get(item_id)
+            if section in normalized_replace_sections:
+                replacement = selected_replacements_by_section.get(section)
+                if replacement and section not in inserted_sections:
+                    final_items.append({**replacement, "section": section})
+                    inserted_sections.add(section)
+                continue
+            final_items.append({**wardrobe_by_id[item_id], "section": section})
+
+        for section, replacement in selected_replacements_by_section.items():
+            if section not in inserted_sections:
+                final_items.append({**replacement, "section": section})
+                inserted_sections.add(section)
+
+        final_item_ids = [str(item.get("id")) for item in final_items if item.get("id")]
+        for item_id in locked_item_ids:
+            if item_id not in final_item_ids:
+                section = current_sections_by_id[item_id]
+                final_items.append({**wardrobe_by_id[item_id], "section": section})
+                final_item_ids.append(item_id)
+
+        final_item_ids = [str(item.get("id")) for item in final_items if item.get("id")]
+        debug_payload = {
+            "mode": "strict_replace_piece",
+            "replace_sections": normalized_replace_sections,
+            "locked_item_ids": locked_item_ids,
+            "removed_item_ids": removed_item_ids,
+            "replacement_item_ids": replacement_item_ids,
+            "final_item_ids": final_item_ids,
+        }
+        print(f"[StrictReplace] {json.dumps(debug_payload, ensure_ascii=False)}")
+
+        reasoning = self._strict_replace_reasoning(
+            normalized_replace_sections,
+            user_request_text,
+        )
+        return {
+            "success": True,
+            "outfit": {
+                "items": final_items,
+                "reasoning": reasoning,
+            },
+            "model_used": "strict_replace_piece",
+            "context_used": "strict_replace_piece",
+            "validation": {
+                "warnings": [],
+                "errors": [],
+            },
+            "debug": debug_payload,
+            "timestamp": datetime.now().isoformat(),
+        }
+
     def _build_followup_plan(
         self,
         parsed_constraints: Dict[str, Any],
@@ -2695,8 +3322,11 @@ Required response:
         return {
             "shoes": "shoes",
             "outer": "jacket",
+            "outer_layer": "jacket",
             "insulation": "sweater",
+            "insulation_layer": "sweater",
             "base": "top",
+            "base_layer": "top",
             "pants": "pants",
             "accessories": "accessories",
         }.get(section, section)
@@ -2706,6 +3336,10 @@ Required response:
             return "I could not find another clean pair of pants to replace the current one."
         if section == "shoes":
             return "I could not replace the shoes because no alternative clean shoes are available."
+        if section == "outer_layer":
+            return "I could not replace the jacket because no alternative clean jacket is available."
+        if section in {"base_layer", "insulation_layer"}:
+            return "I could not replace that top because no alternative clean top is available."
         label = self._section_label(section)
         return f"I could not replace the {label} because no alternative clean {label} item is available."
 

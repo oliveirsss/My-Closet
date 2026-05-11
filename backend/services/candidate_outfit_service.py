@@ -148,6 +148,41 @@ SECTION_ORDER = [
 ]
 REQUIRED_SECTIONS = ["base_layer", "pants", "shoes"]
 
+NEUTRAL_COLORS = {"black", "white", "gray", "grey", "beige", "brown", "navy", "blue"}
+STRONG_COLORS = {"yellow", "red", "green", "pink", "purple", "orange"}
+FORMALITY_BY_STYLE = {
+    "sporty": 1,
+    "sport": 1,
+    "desportivo": 1,
+    "streetwear": 1,
+    "casual": 2,
+    "daily": 2,
+    "dia a dia": 2,
+    "comfortable": 2,
+    "confortavel": 2,
+    "smart casual": 3,
+    "smart_casual": 3,
+    "classic": 4,
+    "classico": 4,
+    "classica": 4,
+    "formal": 5,
+    "elegant": 5,
+    "elegante": 5,
+}
+OCCASION_STYLE_FIT = {
+    "work": {"formal", "classic", "smart casual", "elegant"},
+    "trabalho": {"formal", "classic", "smart casual", "elegant"},
+    "dinner": {"smart casual", "classic", "formal", "elegant"},
+    "jantar": {"smart casual", "classic", "formal", "elegant"},
+    "daily": {"casual", "streetwear", "smart casual"},
+    "dia a dia": {"casual", "streetwear", "smart casual"},
+    "sport": {"sporty"},
+    "desporto": {"sporty"},
+    "night": {"streetwear", "smart casual", "elegant"},
+    "noite": {"streetwear", "smart casual", "elegant"},
+    "sair": {"streetwear", "smart casual", "elegant"},
+}
+
 
 @dataclass
 class CandidateOutfit:
@@ -432,8 +467,6 @@ class CandidateOutfitService:
         }
 
         base_options = self._forced_or_options("base_layer", sorted_groups, must_by_section)
-        if not base_options and sorted_groups.get("insulation_layer"):
-            base_options = sorted_groups.get("insulation_layer", [])[:4]
         pants_options = self._forced_or_options("pants", sorted_groups, must_by_section)
         shoes_options = self._forced_or_options("shoes", sorted_groups, must_by_section)
         insulation_options = self._forced_or_optional_options("insulation_layer", sorted_groups, must_by_section)
@@ -573,6 +606,13 @@ class CandidateOutfitService:
                 return False, f"missing_must_include:{section}"
             if str(selected.get("id")) != str(required_item["id"]):
                 return False, f"must_include_mismatch:{section}"
+
+        for section, item in raw_items.items():
+            if not item:
+                continue
+            actual_section = self.get_section(item)
+            if actual_section != section:
+                return False, f"section_mismatch:{section}:{actual_section}"
 
         return True, ""
 
@@ -730,76 +770,341 @@ class CandidateOutfitService:
         must_by_section: Dict[str, Dict[str, Any]],
         weather: Dict[str, Any],
     ) -> Tuple[float, Dict[str, Any]]:
-        requested_style = (
-            parsed_intent.get("requested_style")
-            or self._first_value(parsed_intent.get("style"))
-        )
-        score = 0.0
-        style_matches = 0
-        weather_matches = 0
-        section_correct_matches = 0
-        compatible_colors = 0
-        usage_penalty = 0.0
+        score_breakdown = {
+            "request_match": self._request_match_score(items, parsed_intent, must_by_section),
+            "style_consistency": self._style_consistency_score(items),
+            "formality": self._formality_score(items, parsed_intent),
+            "color_harmony": self._color_harmony_score(items),
+            "occasion_fit": self._occasion_fit_score(items, parsed_intent),
+            "weather": self._weather_score(items, weather),
+            "completeness": self._completeness_score(items, weather),
+            "usage_rotation": self._usage_rotation_score(items),
+            "section_correctness": self._section_correctness_score(items),
+        }
+        total = round(sum(score_breakdown.values()), 3)
+        score_breakdown["total"] = total
 
-        temp = weather.get("temp", weather.get("temperature"))
+        return total, {
+            "request_match": score_breakdown["request_match"] >= 22,
+            "style_match": (
+                score_breakdown["style_consistency"] >= 9
+                and score_breakdown["formality"] >= 9
+            ),
+            "weather_match": score_breakdown["weather"] >= 8,
+            "complete_outfit": score_breakdown["completeness"] >= 12,
+            "section_correctness": score_breakdown["section_correctness"],
+            "color_coherence": score_breakdown["color_harmony"],
+            "usage_rotation": score_breakdown["usage_rotation"],
+            "score_breakdown": score_breakdown,
+            "score_explanation": self._score_explanation(score_breakdown),
+        }
+
+    def _request_match_score(
+        self,
+        items: List[Dict[str, Any]],
+        parsed_intent: Dict[str, Any],
+        must_by_section: Dict[str, Dict[str, Any]],
+    ) -> float:
+        score = 12.0
+        item_ids = {str(item.get("id")) for item in items}
+        if must_by_section:
+            required_ids = {str(item.get("id")) for item in must_by_section.values()}
+            score += 18.0 if required_ids.issubset(item_ids) else -30.0
+
+        requested_colors = {
+            self.normalize_color(color)
+            for color in (parsed_intent.get("requested_colors") or [])
+            if color
+        }
+        requested_types = {
+            self.normalize_type(item_type)
+            for item_type in (parsed_intent.get("requested_types") or [])
+            if item_type
+        }
+        requested_style = self._requested_style(parsed_intent)
+        requested_occasion = self._requested_occasion(parsed_intent)
+
+        if requested_colors:
+            colors = {self.normalize_color(item.get("source", {}).get("color")) for item in items}
+            score += 5.0 if requested_colors & colors else -8.0
+        if requested_types:
+            sections = {item.get("section") for item in items}
+            score += 5.0 if requested_types & sections else -8.0
+        if requested_style:
+            style_hits = sum(
+                1 for item in items
+                if self._item_style_matches(item.get("source", {}), requested_style)
+            )
+            score += min(style_hits * 4.0, 8.0)
+        if requested_occasion:
+            occasion_hits = sum(
+                1 for item in items
+                if requested_occasion in self._item_text(item.get("source", {}))
+            )
+            score += min(occasion_hits * 3.0, 6.0)
+
+        return self._clamp(score, 0.0, 30.0)
+
+    def _style_consistency_score(self, items: List[Dict[str, Any]]) -> float:
+        styles = {self._item_style_label(item.get("source", {})) for item in items}
+        score = 15.0
+        incompatible_pairs = [
+            ("formal", "sporty"),
+            ("formal", "streetwear"),
+            ("classic", "sporty"),
+            ("elegant", "streetwear"),
+        ]
+        for left, right in incompatible_pairs:
+            if left in styles and right in styles:
+                score -= 5.0
+        if "smart casual" in styles and ({"formal", "casual"} & styles):
+            score += 2.0
+        return self._clamp(score, 0.0, 15.0)
+
+    def _formality_score(
+        self,
+        items: List[Dict[str, Any]],
+        parsed_intent: Dict[str, Any],
+    ) -> float:
+        values = [self._item_formality(item.get("source", {})) for item in items]
+        if not values:
+            return 0.0
+        average = sum(values) / len(values)
+        formality_range = max(values) - min(values)
+        score = 15.0 - (formality_range * 2.0)
+        requested_style = self._requested_style(parsed_intent)
+        if requested_style in {"formal", "elegant", "classic"}:
+            score += 4.0 if average >= 4.0 else -6.0
+        elif requested_style == "casual":
+            score += 4.0 if 2.0 <= average <= 3.2 else -4.0
+        elif requested_style in {"streetwear", "sporty"}:
+            score += 4.0 if 1.0 <= average <= 2.3 else -5.0
+        return self._clamp(score, 0.0, 15.0)
+
+    def _color_harmony_score(self, items: List[Dict[str, Any]]) -> float:
+        colors = [
+            self.normalize_color(item.get("source", {}).get("color"))
+            for item in items
+            if item.get("source", {}).get("color")
+        ]
+        if not colors:
+            return 7.0
+        neutral_count = sum(1 for color in colors if color in NEUTRAL_COLORS)
+        strong_colors = [color for color in colors if color in STRONG_COLORS]
+        unique_strong = set(strong_colors)
+        score = 6.0 + min(neutral_count * 1.2, 4.0)
+        if len(unique_strong) <= 1:
+            score += 2.0
+        else:
+            score -= (len(unique_strong) - 1) * 3.0
+        section_by_color = {
+            item.get("section"): self.normalize_color(item.get("source", {}).get("color"))
+            for item in items
+        }
+        if section_by_color.get("shoes") in unique_strong and section_by_color.get("accessories") == section_by_color.get("shoes"):
+            score += 1.0
+        return self._clamp(score, 0.0, 12.0)
+
+    def _occasion_fit_score(
+        self,
+        items: List[Dict[str, Any]],
+        parsed_intent: Dict[str, Any],
+    ) -> float:
+        requested = self._requested_occasion(parsed_intent)
+        if not requested:
+            return 7.0
+        accepted_styles = OCCASION_STYLE_FIT.get(requested, {requested})
+        hits = 0
         for item in items:
             source = item.get("source", {})
-            score += self._item_score(source, parsed_intent)
-            if requested_style and self._item_style_matches(source, requested_style):
-                style_matches += 1
-            if item.get("section") == self.get_section(source):
-                section_correct_matches += 1
-            color = self.normalize_color(source.get("color"))
-            if color in {"black", "white", "gray", "grey", "beige", "brown", "blue"}:
-                compatible_colors += 1
-            usage = self._usage_frequency(source)
-            usage_penalty += min(usage, 10) * 0.35
-            try:
-                weather_ok = temp is None or self._item_temperature_match(source, float(temp))
-            except (TypeError, ValueError):
-                weather_ok = True
-            if weather_ok:
-                weather_matches += 1
-            if requested_style:
-                score += self._section_style_score(
-                    item.get("section"),
-                    source,
-                    requested_style,
-                )
+            style = self._item_style_label(source)
+            text = self._item_text(source)
+            if style in accepted_styles or requested in text:
+                hits += 1
+        return self._clamp(4.0 + hits * 2.0, 0.0, 10.0)
 
-        request_match = all(
-            required["id"] in [item["id"] for item in items]
-            for required in must_by_section.values()
-        )
+    def _weather_score(self, items: List[Dict[str, Any]], weather: Dict[str, Any]) -> float:
+        temp = weather.get("temp", weather.get("temperature"))
+        condition = self._normalize_text(weather.get("condition"))
         has_sections = {item.get("section") for item in items}
-        complete_outfit = all(section in has_sections for section in REQUIRED_SECTIONS)
-        style_match = bool(requested_style and style_matches > 0) or not requested_style
-        weather_match = weather_matches == len(items)
-        if request_match:
-            score += 30
-        if complete_outfit:
-            score += 18
-        if style_match:
-            score += 6 + (style_matches * 4)
-        if weather_match:
-            score += 10
-        score += section_correct_matches * 3
-        score += compatible_colors * 1.5
-        if "outer_layer" in has_sections:
-            score += 2
-        if "insulation_layer" in has_sections:
-            score += 1
-        score -= usage_penalty
+        score = 8.0
+        if temp is not None:
+            try:
+                temp_value = float(temp)
+                compatible = sum(
+                    1 for item in items
+                    if self._item_temperature_match(item.get("source", {}), temp_value)
+                )
+                score = 5.0 + (compatible / max(len(items), 1)) * 5.0
+                if temp_value <= 15:
+                    if "insulation_layer" in has_sections:
+                        score += 1.5
+                    if "outer_layer" in has_sections:
+                        score += 1.5
+                elif temp_value >= 24:
+                    if "outer_layer" in has_sections:
+                        score -= 2.0
+                    if "insulation_layer" in has_sections:
+                        score -= 1.5
+            except (TypeError, ValueError):
+                pass
+        if any(token in condition for token in ["rain", "chuva", "cloudy", "nublado"]):
+            weatherproof = sum(
+                1 for item in items
+                if item.get("section") in {"outer_layer", "shoes"}
+                and any(token in self._item_text(item.get("source", {})) for token in ["waterproof", "impermeavel", "rain", "chuva", "boot", "bota"])
+            )
+            score += min(weatherproof, 2) * 1.0
+        return self._clamp(score, 0.0, 12.0)
 
-        return score, {
-            "request_match": request_match,
-            "style_match": style_match,
-            "weather_match": weather_match,
-            "complete_outfit": complete_outfit,
-            "section_correctness": section_correct_matches,
-            "color_coherence": compatible_colors,
-            "usage_penalty": round(usage_penalty, 3),
-        }
+    def _completeness_score(self, items: List[Dict[str, Any]], weather: Dict[str, Any]) -> float:
+        section_counts: Dict[str, int] = {}
+        for item in items:
+            section = item.get("section")
+            section_counts[section] = section_counts.get(section, 0) + 1
+        score = 0.0
+        for section in REQUIRED_SECTIONS:
+            score += 4.0 if section_counts.get(section) else -8.0
+        if section_counts.get("accessories"):
+            score += 1.0
+        temp = weather.get("temp", weather.get("temperature"))
+        try:
+            temp_value = float(temp) if temp is not None else None
+        except (TypeError, ValueError):
+            temp_value = None
+        if temp_value is not None and temp_value <= 15:
+            if section_counts.get("insulation_layer"):
+                score += 1.0
+            if section_counts.get("outer_layer"):
+                score += 1.0
+        if temp_value is not None and temp_value >= 24 and section_counts.get("outer_layer"):
+            score -= 2.0
+        duplicate_sections = sum(
+            max(count - 1, 0)
+            for section, count in section_counts.items()
+            if section != "accessories"
+        )
+        score -= duplicate_sections * 3.0
+        return self._clamp(score, 0.0, 14.0)
+
+    def _usage_rotation_score(self, items: List[Dict[str, Any]]) -> float:
+        if not items:
+            return 0.0
+        usages = [self._usage_frequency(item.get("source", {})) for item in items]
+        average_usage = sum(usages) / len(usages)
+        score = 6.0 - min(average_usage, 10.0) * 0.45
+        unused_bonus = sum(1 for usage in usages if usage <= 1) * 0.2
+        return self._clamp(score + unused_bonus, 0.0, 6.0)
+
+    def _section_correctness_score(self, items: List[Dict[str, Any]]) -> float:
+        if not items:
+            return 0.0
+        correct = sum(
+            1 for item in items
+            if item.get("section") == self.get_section(item.get("source", {}))
+        )
+        return self._clamp((correct / len(items)) * 10.0, 0.0, 10.0)
+
+    def _score_explanation(self, score_breakdown: Dict[str, float]) -> str:
+        strengths = []
+        if score_breakdown.get("request_match", 0) >= 24:
+            strengths.append("strong request match")
+        if score_breakdown.get("style_consistency", 0) >= 12:
+            strengths.append("consistent style")
+        if score_breakdown.get("color_harmony", 0) >= 9:
+            strengths.append("balanced colors")
+        if score_breakdown.get("weather", 0) >= 9:
+            strengths.append("good weather fit")
+        if score_breakdown.get("formality", 0) >= 12:
+            strengths.append("aligned formality")
+        if not strengths:
+            strengths.append("valid complete outfit")
+        return ", ".join(strengths[:3])
+
+    def _requested_style(self, parsed_intent: Dict[str, Any]) -> str:
+        value = (
+            parsed_intent.get("requested_style")
+            or self._first_value(parsed_intent.get("style"))
+            or self._first_value(parsed_intent.get("requested_styles"))
+        )
+        return self._canonical_style(value)
+
+    def _requested_occasion(self, parsed_intent: Dict[str, Any]) -> str:
+        value = (
+            parsed_intent.get("requested_occasion")
+            or self._first_value(parsed_intent.get("occasion"))
+            or self._first_value(parsed_intent.get("requested_occasions"))
+        )
+        text = self._normalize_text(value)
+        if not text:
+            text = self._normalize_text(parsed_intent.get("raw_text") or parsed_intent.get("user_request"))
+        if any(token in text for token in ["trabalho", "work", "office", "escritorio"]):
+            return "work"
+        if any(token in text for token in ["jantar", "dinner"]):
+            return "dinner"
+        if any(token in text for token in ["dia a dia", "daily", "everyday"]):
+            return "daily"
+        if any(token in text for token in ["desporto", "sport", "gym", "treino"]):
+            return "sport"
+        if any(token in text for token in ["sair", "noite", "night"]):
+            return "night"
+        return text
+
+    def _item_style_label(self, item: Dict[str, Any]) -> str:
+        text = self._item_text(item)
+        if any(token in text for token in ["formal", "work", "office", "camisa", "shirt", "blazer", "elegant", "elegante"]):
+            return "formal"
+        if any(token in text for token in ["classic", "classico", "classica", "classicas", "trousers", "calcas classicas"]):
+            return "classic"
+        if "smart casual" in text or "smart_casual" in text:
+            return "smart casual"
+        if any(token in text for token in ["sport", "sporty", "desportivo", "running", "run", "jersey", "gym"]):
+            return "sporty"
+        if any(token in text for token in ["streetwear", "oversized", "stussy", "jordan"]):
+            return "streetwear"
+        if any(token in text for token in ["casual", "daily", "dia a dia", "hoodie", "tee", "t-shirt"]):
+            return "casual"
+        return "casual"
+
+    def _item_formality(self, item: Dict[str, Any]) -> int:
+        label = self._item_style_label(item)
+        if label in {"sporty", "streetwear"}:
+            return 1
+        if label == "casual":
+            return 2
+        if label == "smart casual":
+            return 3
+        if label == "classic":
+            return 4
+        if label in {"formal", "elegant"}:
+            return 5
+        return 2
+
+    def _canonical_style(self, value: Any) -> str:
+        text = self._normalize_text(value)
+        if not text:
+            return ""
+        if text in {"desportivo", "sport", "sporty"}:
+            return "sporty"
+        if text in {"elegante", "elegant"}:
+            return "elegant"
+        if text in {"classico", "classica", "classic"}:
+            return "classic"
+        if text in {"confortavel", "comfortable"}:
+            return "casual"
+        if "smart" in text:
+            return "smart casual"
+        return text
+
+    def _item_text(self, item: Dict[str, Any]) -> str:
+        return self._normalize_text(
+            f"{item.get('name', '')} {item.get('type', '')} "
+            f"{item.get('style', '')} {item.get('occasion', '')} "
+            f"{item.get('brand', '')} {item.get('color', '')}"
+        )
+
+    def _clamp(self, value: float, minimum: float, maximum: float) -> float:
+        return round(max(minimum, min(maximum, value)), 3)
 
     def _sort_items(
         self,

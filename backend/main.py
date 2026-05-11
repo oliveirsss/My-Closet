@@ -4,7 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer
-from routers import ai_outfit, auth, items, social, storage, usage  # Import all routers
+from routers import ai_outfit, auth, items, outfits, social, storage, usage  # Import all routers
 
 app = FastAPI()
 
@@ -25,6 +25,7 @@ app.include_router(storage.router)
 app.include_router(social.router)
 app.include_router(ai_outfit.router)
 app.include_router(usage.router)
+app.include_router(outfits.router)
 
 
 @app.exception_handler(RequestValidationError)
