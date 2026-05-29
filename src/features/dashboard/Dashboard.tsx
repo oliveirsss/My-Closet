@@ -170,30 +170,47 @@ export function Dashboard({
     checkTopCreator();
   }, [userProfile.id]);
 
-  // 4. Carregar Tempo (Sempre que Location mudar)
+  // 4. Carregar Tempo (Prioridade: 1. GPS, 2. Localização do Perfil, 3. Lisboa - Fallback)
   useEffect(() => {
-    // Se o utilizador tiver uma localização explícita no perfil, usamos essa
-    if (userProfile.location && userProfile.location.trim() !== "") {
-      fetchWeatherByCity(userProfile.location);
-      return;
+    let active = true;
+
+    const loadWeather = () => {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          async (position) => {
+            if (!active) return;
+            const { latitude, longitude } = position.coords;
+            fetchWeatherByCoords(latitude, longitude);
+          },
+          async (error) => {
+            if (!active) return;
+            console.warn("Geolocalização não disponível, a usar localização do perfil:", error);
+            if (userProfile.location && userProfile.location.trim() !== "") {
+              fetchWeatherByCity(userProfile.location);
+            } else {
+              fetchWeatherByCoords(38.7169, -9.1399); // Fallback Lisboa
+            }
+          },
+          { timeout: 10000 }
+        );
+      } else {
+        if (userProfile.location && userProfile.location.trim() !== "") {
+          fetchWeatherByCity(userProfile.location);
+        } else {
+          fetchWeatherByCoords(38.7169, -9.1399);
+        }
+      }
+    };
+
+    // Apenas carrega a meteorologia quando o perfil estiver carregado (evita chamadas redundantes)
+    if (userProfile.id) {
+      loadWeather();
     }
 
-    // Senão tentamos o GPS
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          const { latitude, longitude } = position.coords;
-          fetchWeatherByCoords(latitude, longitude);
-        },
-        (error) => {
-          console.error("Erro de localização:", error);
-          fetchWeatherByCoords(38.7169, -9.1399); // Fallback Lisboa
-        },
-      );
-    } else {
-      fetchWeatherByCoords(38.7169, -9.1399);
-    }
-  }, [userProfile.location]);
+    return () => {
+      active = false;
+    };
+  }, [userProfile.location, userProfile.id]);
 
   const processWeatherResponse = async (res: Response, fallbackCity?: string) => {
     if (!res.ok) throw new Error("Weather API failed");
