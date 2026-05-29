@@ -239,6 +239,12 @@ class ItemScoringService:
                     "office",
                     "business",
                     "elegant",
+                    "dress",
+                    "vestido",
+                    "blazer",
+                    "bag",
+                    "mala",
+                    "carteira",
                 ],
                 "penalty": [
                     "jersey",
@@ -275,6 +281,16 @@ class ItemScoringService:
                     "denim",
                     "daily",
                     "everyday",
+                    "skirt",
+                    "saia",
+                    "top",
+                    "blouse",
+                    "blusa",
+                    "jumpsuit",
+                    "macacao",
+                    "macacão",
+                    "vestido casual",
+                    "casual dress",
                 ],
                 "penalty": ["suit", "blazer", "formal", "oxford", "business"],
             },
@@ -344,17 +360,29 @@ class ItemScoringService:
 
         # Verify type matches layer expectation
         if layer == 1:  # Base layer
-            base_types = ["t-shirt", "shirt", "top", "blouse", "camiseta", "camisa"]
+            base_types = [
+                "t-shirt",
+                "shirt",
+                "top",
+                "blouse",
+                "camiseta",
+                "camisa",
+                "vestido",
+                "dress",
+                "jumpsuit",
+                "macacao",
+                "macacão",
+            ]
             if any(t in item_type for t in base_types):
                 return 5.0
 
         elif layer == 2:  # Insulation layer
-            insulation_types = ["sweater", "hoodie", "cardigan", "pants", "jeans", "trousers"]
+            insulation_types = ["sweater", "hoodie", "cardigan", "pants", "jeans", "trousers", "skirt", "saia"]
             if any(t in item_type for t in insulation_types):
                 return 5.0
 
         elif layer == 3:  # Outer layer
-            outer_types = ["jacket", "coat", "shoes", "boots", "accessories"]
+            outer_types = ["jacket", "coat", "shoes", "boots", "accessories", "bag", "mala", "carteira", "sandals", "sandalia"]
             if any(t in item_type for t in outer_types):
                 return 5.0
 

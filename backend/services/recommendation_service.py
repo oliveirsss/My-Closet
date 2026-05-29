@@ -2405,6 +2405,8 @@ Required response:
         section = self._item_section(item)
         if section == "shoes":
             return "shoes"
+        if section in {"dress", "skirt", "jumpsuit", "bag"}:
+            return section
         if section == "accessories":
             return "accessories"
         if section == "pants":
@@ -2417,6 +2419,8 @@ Required response:
         actual_section = self._item_section(item)
         if section == "shoes":
             return actual_section == "shoes"
+        if section in {"dress", "skirt", "jumpsuit", "bag"}:
+            return actual_section == section
         if section == "accessories":
             return actual_section == "accessories"
         if section == 3:
@@ -2542,6 +2546,10 @@ Required response:
             "top": "base_layer",
             "tops": "base_layer",
             "base_layer": "base_layer",
+            "dress": "dress",
+            "skirt": "skirt",
+            "jumpsuit": "jumpsuit",
+            "bag": "bag",
             "insulation": "insulation_layer",
             "mid_layer": "insulation_layer",
             "insulation_layer": "insulation_layer",
@@ -3237,9 +3245,17 @@ Required response:
             layer = getattr(item, "layer", None)
 
         text = f"{item_type} {item_name}".lower()
-        if any(token in text for token in ["sapatilha", "tenis", "ténis", "sneaker", "shoe", "boot", "calçado", "calcado"]):
+        if any(token in text for token in ["vestido", "dress"]):
+            return "dress"
+        if any(token in text for token in ["saia", "skirt"]):
+            return "skirt"
+        if any(token in text for token in ["macacao", "macacão", "jumpsuit"]):
+            return "jumpsuit"
+        if any(token in text for token in ["mala", "carteira", "bag", "handbag", "purse"]):
+            return "bag"
+        if any(token in text for token in ["sapatilha", "tenis", "ténis", "sneaker", "shoe", "boot", "calçado", "calcado", "sandalia", "sandália", "sandal"]):
             return "shoes"
-        if any(token in text for token in ["calça", "calca", "pants", "trouser", "jeans", "short", "calções", "calcoes", "skirt", "saia"]):
+        if any(token in text for token in ["calça", "calca", "pants", "trouser", "jeans", "short", "calções", "calcoes"]):
             return "pants"
         if any(token in text for token in ["casaco", "jacket", "coat", "blazer", "sobretudo"]):
             return "outer"
@@ -3327,7 +3343,11 @@ Required response:
             "insulation_layer": "sweater",
             "base": "top",
             "base_layer": "top",
+            "dress": "dress",
+            "skirt": "skirt",
+            "jumpsuit": "jumpsuit",
             "pants": "pants",
+            "bag": "bag",
             "accessories": "accessories",
         }.get(section, section)
 

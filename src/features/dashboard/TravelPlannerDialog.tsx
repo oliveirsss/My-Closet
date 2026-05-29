@@ -16,21 +16,80 @@ interface TravelPlannerDialogProps {
 }
 
 const sectionLabels: Record<string, string> = {
+  dress: "Vestido",
+  jumpsuit: "Macacão",
   base_layer: "Base",
   insulation_layer: "Isolamento",
+  skirt: "Saia",
   pants: "Calças",
   outer_layer: "Casaco",
   shoes: "Calçado",
+  bag: "Mala",
   accessories: "Acessórios",
 };
 
-const sectionOrder = ["base_layer", "insulation_layer", "pants", "outer_layer", "shoes", "accessories"];
+const sectionOrder = [
+  "dress",
+  "jumpsuit",
+  "base_layer",
+  "insulation_layer",
+  "skirt",
+  "pants",
+  "outer_layer",
+  "shoes",
+  "bag",
+  "accessories",
+];
+
+const packingGroupOrder = [
+  "Vestidos / Tops",
+  "Calças / Saias / Calções",
+  "Casacos",
+  "Calçado",
+  "Acessórios",
+];
 
 function groupItemsBySection(items: any[]) {
   return items.reduce((groups: Record<string, any[]>, item: any) => {
     const section = item.section || "base_layer";
     groups[section] = groups[section] || [];
     groups[section].push(item);
+    return groups;
+  }, {});
+}
+
+function normalizeTravelText(text: string) {
+  return String(text || "")
+    .replace(/\bSome items were reused because the wardrobe has limited alternatives\.?/gi, "Algumas peças foram repetidas porque o guarda-roupa ainda tem poucas alternativas.")
+    .replace(/\band\b/gi, "e");
+}
+
+function uniqueWarnings(warnings: string[]) {
+  return Array.from(new Set((warnings || []).map(normalizeTravelText).filter(Boolean)));
+}
+
+function packingGroupForSection(section: string) {
+  if (section === "dress" || section === "jumpsuit" || section === "base_layer" || section === "insulation_layer") {
+    return "Vestidos / Tops";
+  }
+  if (section === "pants" || section === "skirt") {
+    return "Calças / Saias / Calções";
+  }
+  if (section === "outer_layer") {
+    return "Casacos";
+  }
+  if (section === "shoes") {
+    return "Calçado";
+  }
+  return "Acessórios";
+}
+
+function groupPackingList(entries: any[]) {
+  return entries.reduce((groups: Record<string, any[]>, entry: any) => {
+    const section = entry.item?.section || "accessories";
+    const group = packingGroupForSection(section);
+    groups[group] = groups[group] || [];
+    groups[group].push(entry);
     return groups;
   }, {});
 }
@@ -112,7 +171,7 @@ export function TravelPlannerDialog({ open, onOpenChange, items: _items }: Trave
             weather: dayPlan.weather || { temp: 18, condition: "cloudy" },
             items,
             groupedItems: groupItemsBySection(items),
-            reasoning: dayPlan.outfit?.reasoning || "",
+            reasoning: normalizeTravelText(dayPlan.outfit?.reasoning || ""),
           };
         });
 
@@ -125,7 +184,8 @@ export function TravelPlannerDialog({ open, onOpenChange, items: _items }: Trave
           country: "",
           dailyOutfits,
           packingList,
-          warnings: response.warnings || [],
+          groupedPackingList: groupPackingList(packingList),
+          warnings: uniqueWarnings(response.warnings || []),
           isAI: true
         });
       } else {
@@ -225,22 +285,31 @@ export function TravelPlannerDialog({ open, onOpenChange, items: _items }: Trave
                   {tripPlan.warnings.join(' ')}
                 </div>
               )}
-              <div className="grid grid-cols-5 gap-3 w-full">
-                {tripPlan.packingList.map((entry: any) => (
-                  <div key={entry.item.id} className="group relative flex flex-col items-center">
-                    <div className="w-full aspect-[4/5] bg-white rounded-2xl border border-stone-100 shadow-sm group-hover:shadow-md transition-all duration-300 overflow-hidden mb-2 p-3 flex items-center justify-center relative">
-                      <img src={api.getAssetUrl(entry.item.image)} className="w-full h-full object-contain transform group-hover:scale-105 transition-transform" alt="" />
-                      {entry.count > 1 && (
-                        <span className="absolute top-2 right-2 bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200">
-                          {entry.count}x
-                        </span>
-                      )}
+              <div className="space-y-5">
+                {packingGroupOrder
+                  .filter((group) => tripPlan.groupedPackingList?.[group]?.length)
+                  .map((group) => (
+                    <div key={group}>
+                      <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-500">{group}</h4>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 w-full">
+                        {tripPlan.groupedPackingList[group].map((entry: any) => (
+                          <div key={entry.item.id} className="group relative flex flex-col items-center">
+                            <div className="w-full aspect-[4/5] bg-white rounded-2xl border border-stone-100 shadow-sm group-hover:shadow-md transition-all duration-300 overflow-hidden mb-2 p-3 flex items-center justify-center relative">
+                              <img src={api.getAssetUrl(entry.item.image)} className="w-full h-full object-contain transform group-hover:scale-105 transition-transform" alt="" />
+                              {entry.count > 1 && (
+                                <span className="absolute top-2 right-2 bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200">
+                                  {entry.count}x
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-xs text-stone-600 font-medium text-center leading-tight line-clamp-2 px-1">
+                              {entry.item.name}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                    <span className="text-xs text-stone-600 font-medium text-center leading-tight line-clamp-2 px-1">
-                      {entry.item.name}
-                    </span>
-                  </div>
-                ))}
+                  ))}
               </div>
             </div>
 
@@ -266,7 +335,7 @@ export function TravelPlannerDialog({ open, onOpenChange, items: _items }: Trave
                               <img src={api.getAssetUrl(item.image)} alt="" className="h-full w-full object-contain p-1" />
                             </div>
                             <div className="min-w-0">
-                              <p className="text-[10px] uppercase tracking-wide text-stone-400">{sectionLabels[section]}</p>
+                              <p className="text-[10px] uppercase tracking-wide text-stone-400">{sectionLabels[section] || section}</p>
                               <p className="truncate text-xs font-medium text-stone-700">{item.name}</p>
                             </div>
                           </div>

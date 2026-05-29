@@ -11,6 +11,7 @@ to rule-based recommendations if the VLM fails.
 """
 
 import os
+import re
 from datetime import datetime
 
 from database import get_user_from_token
@@ -84,6 +85,10 @@ recommendation_service = RecommendationService(vlm_service=vlm_service)
 image_preprocessing_service = ImagePreprocessingService()
 candidate_outfit_service = CandidateOutfitService()
 
+TRAVEL_REUSE_WARNING_PT = (
+    "Algumas peças foram repetidas porque o guarda-roupa ainda tem poucas alternativas."
+)
+
 
 def derive_display_section(item: dict) -> str:
     """
@@ -112,7 +117,15 @@ def derive_display_section(item: dict) -> str:
         .replace("ú", "u")
     )
 
-    if any(token in normalized for token in ["calcado", "sapatilha", "tenis", "sneaker", "shoe", "sapato", "bota"]):
+    if any(token in normalized for token in ["vestido", "dress"]):
+        return "dress"
+    if any(token in normalized for token in ["saia", "skirt"]):
+        return "skirt"
+    if any(token in normalized for token in ["macacao", "jumpsuit"]):
+        return "jumpsuit"
+    if any(token in normalized for token in ["mala", "carteira", "handbag", "purse", "bag"]):
+        return "bag"
+    if any(token in normalized for token in ["calcado", "sapatilha", "tenis", "sneaker", "shoe", "sapato", "bota", "sandalia", "sandal"]):
         return "shoes"
     if any(token in normalized for token in ["calca", "calcas", "pants", "trousers", "jeans", "calcoes", "shorts"]):
         return "pants"
@@ -120,6 +133,8 @@ def derive_display_section(item: dict) -> str:
         return "outer_layer"
     if any(token in normalized for token in ["camisola", "hoodie", "sweater", "knit", "malha", "cardigan", "sweatshirt"]):
         return "insulation_layer"
+    if any(token in normalized for token in ["top", "blusa", "blouse"]):
+        return "base_layer"
     if any(token in normalized for token in ["acessor", "accessor", "belt", "cinto", "tie", "gravata", "scarf", "lenco", "hat", "bone", "cap"]):
         return "accessories"
     return "base_layer"
@@ -128,10 +143,14 @@ def derive_display_section(item: dict) -> str:
 def layer_for_section(section: str, fallback_layer: int) -> int:
     return {
         "base_layer": 1,
+        "dress": 1,
+        "jumpsuit": 1,
         "insulation_layer": 2,
+        "skirt": 2,
         "pants": 2,
         "outer_layer": 3,
         "shoes": 3,
+        "bag": 3,
         "accessories": 3,
     }.get(section, fallback_layer)
 
@@ -414,11 +433,15 @@ def _travel_day_weather(day_weather: dict, destination: str) -> dict:
 
 def _clean_item_ids_by_section(items: list[dict]) -> dict[str, set[str]]:
     sections = {
+        "dress": set(),
+        "jumpsuit": set(),
         "base_layer": set(),
+        "skirt": set(),
         "pants": set(),
         "shoes": set(),
         "outer_layer": set(),
         "insulation_layer": set(),
+        "bag": set(),
         "accessories": set(),
     }
     for item in items:
@@ -439,35 +462,41 @@ def _rotation_excludes_for_day(
     trip_days: int,
 ) -> list[str]:
     excluded = set(base_excludes)
-    section_caps = _travel_section_caps(trip_days)
 
-    # Base layers should rotate whenever there are clean alternatives.
-    used_base = used_ids_by_section.get("base_layer", set())
-    clean_base = clean_ids_by_section.get("base_layer", set())
-    if clean_base - used_base:
-        excluded.update(used_base)
-
-    # For the rest, a travel bag is better when useful pieces repeat.
-    for section in ["pants", "shoes", "outer_layer", "insulation_layer", "accessories"]:
+    for section in [
+        "base_layer",
+        "dress",
+        "jumpsuit",
+        "skirt",
+        "pants",
+        "shoes",
+        "outer_layer",
+        "insulation_layer",
+    ]:
         used_ids = used_ids_by_section.get(section, set())
         clean_ids = clean_ids_by_section.get(section, set())
-        cap = section_caps.get(section)
-        if section in {"pants", "shoes"} and clean_ids - used_ids and len(used_ids) < cap:
+        if clean_ids - used_ids:
             excluded.update(used_ids)
-        if cap is not None and len(used_ids) >= cap:
-            excluded.update(clean_ids - used_ids)
     return sorted(excluded)
 
 
 def _travel_section_caps(trip_days: int) -> dict[str, int]:
     return {
+        "dress": min(trip_days, 5),
+        "jumpsuit": min(trip_days, 5),
         "base_layer": min(trip_days, 5),
+        "skirt": 2 if trip_days <= 3 else 3,
         "pants": 2 if trip_days <= 3 else 3,
         "shoes": 2,
         "outer_layer": 2,
         "insulation_layer": 2,
+        "bag": 2,
         "accessories": 2,
     }
+
+
+def _travel_primary_sections() -> set[str]:
+    return {"dress", "jumpsuit", "skirt", "base_layer"}
 
 
 def _selected_sections(items: list[dict]) -> dict[str, list[str]]:
@@ -479,6 +508,14 @@ def _selected_sections(items: list[dict]) -> dict[str, list[str]]:
         section = derive_display_section(item)
         sections.setdefault(section, []).append(str(item_id))
     return sections
+
+
+def _wardrobe_by_id(items: list[dict]) -> dict[str, dict]:
+    return {
+        str(item.get("id")): item
+        for item in items
+        if item.get("id")
+    }
 
 
 def _travel_item_text(item: dict) -> str:
@@ -688,6 +725,184 @@ def _dedupe_items_by_id(items: list[dict]) -> list[dict]:
     return unique
 
 
+def _add_unique_warning(warnings: list[str], warning: str) -> None:
+    if warning and warning not in warnings:
+        warnings.append(warning)
+
+
+def _normalize_travel_reasoning(reasoning: str) -> str:
+    text = str(reasoning or "").strip()
+    if not text:
+        return ""
+    return re.sub(r"\band\b", "e", text, flags=re.IGNORECASE)
+
+
+def _travel_candidate_full_items(
+    candidate: dict,
+    wardrobe_by_item_id: dict[str, dict],
+) -> list[dict]:
+    items = []
+    for candidate_item in candidate.get("items", []):
+        item_id = str(candidate_item.get("id") or "")
+        source = wardrobe_by_item_id.get(item_id)
+        if not source:
+            continue
+        items.append({
+            **source,
+            "section": candidate_item.get("section") or derive_display_section(source),
+        })
+    return _dedupe_items_by_id(items)
+
+
+def _travel_candidate_reuse_score(
+    candidate_items: list[dict],
+    used_ids_by_section: dict[str, set[str]],
+    previous_sections: dict[str, list[str]],
+    exact_outfit_keys: set[tuple[str, ...]],
+) -> tuple[float, bool]:
+    score = 0.0
+    has_reuse = False
+    outfit_key = tuple(sorted(str(item.get("id")) for item in candidate_items if item.get("id")))
+    if outfit_key in exact_outfit_keys:
+        score -= 180.0
+        has_reuse = True
+
+    primary_seen = False
+    for item in candidate_items:
+        item_id = str(item.get("id") or "")
+        section = derive_display_section(item)
+        if not item_id:
+            continue
+        if section in _travel_primary_sections():
+            primary_seen = True
+        if item_id in used_ids_by_section.get(section, set()):
+            has_reuse = True
+            if section in {"dress", "base_layer", "shoes", "outer_layer"}:
+                score -= 95.0
+            elif section in {"jumpsuit", "skirt", "pants", "insulation_layer"}:
+                score -= 70.0
+            elif section in {"bag", "accessories"}:
+                score -= 18.0
+            else:
+                score -= 40.0
+        if section == "outer_layer" and item_id in set(previous_sections.get("outer_layer", [])):
+            score -= 55.0
+        if section == "shoes" and item_id in set(previous_sections.get("shoes", [])):
+            score -= 45.0
+
+    if not primary_seen:
+        score -= 120.0
+    return score, has_reuse
+
+
+def _select_travel_candidate(
+    candidates: list[dict],
+    wardrobe_by_item_id: dict[str, dict],
+    used_ids_by_section: dict[str, set[str]],
+    previous_sections: dict[str, list[str]],
+    exact_outfit_keys: set[tuple[str, ...]],
+) -> tuple[dict | None, list[dict], bool]:
+    best_candidate = None
+    best_items: list[dict] = []
+    best_score = None
+    best_reused = False
+
+    for candidate in candidates:
+        candidate_items = _travel_candidate_full_items(candidate, wardrobe_by_item_id)
+        if not candidate_items:
+            continue
+        diversity_score, reused = _travel_candidate_reuse_score(
+            candidate_items=candidate_items,
+            used_ids_by_section=used_ids_by_section,
+            previous_sections=previous_sections,
+            exact_outfit_keys=exact_outfit_keys,
+        )
+        total_score = float(candidate.get("score") or 0) + diversity_score
+        print(
+            "[TravelPlanner] candidate_score "
+            f"id={candidate.get('candidate_id')} base={candidate.get('score')} "
+            f"diversity={diversity_score} total={total_score} "
+            f"sections={[derive_display_section(item) for item in candidate_items]} "
+            f"ids={[item.get('id') for item in candidate_items]}"
+        )
+        if best_score is None or total_score > best_score:
+            best_score = total_score
+            best_candidate = candidate
+            best_items = candidate_items
+            best_reused = reused
+
+    return best_candidate, best_items, best_reused
+
+
+def _should_add_travel_bag(preferences: dict, requested_style: str) -> bool:
+    text = " ".join(
+        str(value or "")
+        for value in [
+            requested_style,
+            preferences.get("style"),
+            preferences.get("occasion"),
+            preferences.get("event"),
+        ]
+    ).lower()
+    return any(token in text for token in ["formal", "date", "dinner", "jantar", "elegant", "elegante", "party"])
+
+
+def _best_travel_bag(
+    wardrobe_items: list[dict],
+    outfit_items: list[dict],
+    used_ids_by_section: dict[str, set[str]],
+    requested_style: str,
+    preferences: dict,
+) -> dict | None:
+    if any(derive_display_section(item) == "bag" for item in outfit_items):
+        return None
+    if not _should_add_travel_bag(preferences, requested_style):
+        return None
+    outfit_ids = {str(item.get("id")) for item in outfit_items if item.get("id")}
+    candidates = []
+    for item in wardrobe_items:
+        item_id = str(item.get("id") or "")
+        if not item_id or item_id in outfit_ids:
+            continue
+        if derive_display_section(item) != "bag":
+            continue
+        if str(item.get("status") or "clean").strip().lower() != "clean":
+            continue
+        text = _travel_item_text(item)
+        score = 8.0
+        if item_id not in used_ids_by_section.get("bag", set()):
+            score += 10.0
+        if any(token in text for token in ["formal", "elegant", "elegante", "leather", "pele", "preto", "black"]):
+            score += 4.0
+        candidates.append((score, item))
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda pair: pair[0], reverse=True)[0][1]
+
+
+def _build_travel_day_reasoning(
+    day_number: int,
+    outfit_items: list[dict],
+    weather: dict,
+    requested_style: str,
+) -> str:
+    item_names = [str(item.get("name") or item.get("type") or "").strip() for item in outfit_items]
+    item_names = [name for name in item_names if name]
+    if len(item_names) > 1:
+        item_phrase = f"{', '.join(item_names[:-1])} e {item_names[-1]}"
+    elif item_names:
+        item_phrase = item_names[0]
+    else:
+        item_phrase = "as peças selecionadas"
+    style = requested_style or "casual"
+    temp = round(_weather_temp(weather))
+    condition = weather.get("condition", "tempo previsto")
+    return _normalize_travel_reasoning(
+        f"Para o Dia {day_number}, escolhi um look {style} com {item_phrase}, "
+        f"adequado a {temp}°C e tempo {condition}."
+    )
+
+
 def _trim_travel_outfit_layers(items: list[dict], weather: dict) -> list[dict]:
     deduped = _dedupe_items_by_id(items)
     temp = _weather_temp(weather)
@@ -695,7 +910,15 @@ def _trim_travel_outfit_layers(items: list[dict], weather: dict) -> list[dict]:
     max_items = 5 if temp < 20 or rainy_or_cloudy else 4
     sunny_warm = _is_sunny_warm_weather(weather)
 
-    required_sections = {"base_layer", "pants", "shoes"}
+    present_sections = {derive_display_section(item) for item in deduped}
+    if "dress" in present_sections:
+        required_sections = {"dress", "shoes"}
+    elif "jumpsuit" in present_sections:
+        required_sections = {"jumpsuit", "shoes"}
+    elif "skirt" in present_sections:
+        required_sections = {"skirt", "base_layer", "shoes"}
+    else:
+        required_sections = {"base_layer", "pants", "shoes"}
 
     if sunny_warm:
         insulation_ids = [
@@ -738,7 +961,7 @@ def _trim_travel_outfit_layers(items: list[dict], weather: dict) -> list[dict]:
 
     while len(deduped) > max_items:
         remove_index = None
-        for section in ["accessories", "insulation_layer", "outer_layer"]:
+        for section in ["accessories", "bag", "insulation_layer", "outer_layer"]:
             for index in range(len(deduped) - 1, -1, -1):
                 if derive_display_section(deduped[index]) == section:
                     if section == "outer_layer" and _is_rainy_weather(weather):
@@ -831,11 +1054,15 @@ async def get_candidate_based_travel_plan(
     exact_outfit_keys = set()
     base_excludes = {str(item_id) for item_id in payload.get("exclude_items") or []}
     used_ids_by_section = {
+        "dress": set(),
+        "jumpsuit": set(),
         "base_layer": set(),
+        "skirt": set(),
         "pants": set(),
         "shoes": set(),
         "outer_layer": set(),
         "insulation_layer": set(),
+        "bag": set(),
         "accessories": set(),
     }
     wardrobe_items = await recommendation_service.wardrobe_service.get_user_wardrobe(
@@ -846,6 +1073,8 @@ async def get_candidate_based_travel_plan(
     clean_ids_by_section = _clean_item_ids_by_section(wardrobe_items)
     any_reused = False
     model_used = "candidate_travel_plan"
+    previous_sections: dict[str, list[str]] = {}
+    wardrobe_by_item_id = _wardrobe_by_id(wardrobe_items)
 
     for day_index in range(requested_days):
         weather = _travel_day_weather(
@@ -875,44 +1104,56 @@ async def get_candidate_based_travel_plan(
         print(f"[TravelPlanner] day={day_index + 1} weather={weather}")
         print(f"[TravelPlanner] day={day_index + 1} excluded_for_rotation={excluded_for_day}")
 
-        result = await recommendation_service.recommend_daily_outfit(
+        parsed_intent = recommendation_service.user_request_parser.parse_request(user_request)
+        if requested_style:
+            parsed_intent["style"] = [requested_style]
+            parsed_intent["requested_style"] = requested_style
+        if preferences.get("occasion"):
+            parsed_intent["occasion"] = [preferences["occasion"]]
+
+        candidate_result = candidate_outfit_service.generate_candidate_outfits(
             user_id=user_id,
-            temperature=weather["temp"],
-            weather_condition=weather["condition"],
-            humidity=weather.get("humidity"),
-            wind_speed=weather.get("wind_speed"),
-            occasion=preferences.get("occasion", "travel"),
-            preferences=preferences,
-            exclude_items=excluded_for_day,
+            wardrobe_items=wardrobe_items,
+            weather=weather,
+            parsed_intent=parsed_intent,
             current_outfit_items=[],
-            user_request=user_request,
+            exclude_items=sorted(base_excludes | constraint_excludes),
+            max_candidates=24,
         )
 
-        if not result.get("success"):
-            warnings.append(
-                "Some items were reused because the wardrobe has limited alternatives."
-            )
-            result = await recommendation_service.recommend_daily_outfit(
+        if not candidate_result.get("success"):
+            _add_unique_warning(warnings, TRAVEL_REUSE_WARNING_PT)
+            candidate_result = candidate_outfit_service.generate_candidate_outfits(
                 user_id=user_id,
-                temperature=weather["temp"],
-                weather_condition=weather["condition"],
-                humidity=weather.get("humidity"),
-                wind_speed=weather.get("wind_speed"),
-                occasion=preferences.get("occasion", "travel"),
-                preferences=preferences,
-                exclude_items=sorted(base_excludes | constraint_excludes),
+                wardrobe_items=wardrobe_items,
+                weather=weather,
+                parsed_intent=parsed_intent,
                 current_outfit_items=[],
-                user_request=user_request,
+                exclude_items=sorted(base_excludes),
+                max_candidates=24,
             )
 
-        if not result.get("success"):
+        if not candidate_result.get("success"):
             raise HTTPException(
                 status_code=500,
-                detail=result.get("error", f"Could not generate outfit for day {day_index + 1}."),
+                detail=candidate_result.get("error", f"Could not generate outfit for day {day_index + 1}."),
             )
 
-        outfit_data = result.get("outfit", {})
-        outfit_items = _dedupe_items_by_id(outfit_data.get("items", []))
+        selected_candidate, outfit_items, candidate_reused = _select_travel_candidate(
+            candidates=candidate_result.get("candidates", []),
+            wardrobe_by_item_id=wardrobe_by_item_id,
+            used_ids_by_section=used_ids_by_section,
+            previous_sections=previous_sections,
+            exact_outfit_keys=exact_outfit_keys,
+        )
+        if not selected_candidate or not outfit_items:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not select a travel outfit for day {day_index + 1}.",
+            )
+        if candidate_reused:
+            any_reused = True
+
         selected_sections_before_layer = _selected_sections(outfit_items)
         if (
             _needs_extra_layer(weather)
@@ -932,11 +1173,17 @@ async def get_candidate_based_travel_plan(
             }:
                 extra_section = derive_display_section(extra_layer)
                 outfit_items.append({**extra_layer, "section": extra_section})
-                outfit_data["reasoning"] = (
-                    f"{outfit_data.get('reasoning', '').rstrip()} "
-                    f"Acrescentei {extra_layer.get('name')} como camada extra para o clima."
-                ).strip()
         outfit_items = _trim_travel_outfit_layers(outfit_items, weather)
+        bag_item = _best_travel_bag(
+            wardrobe_items=wardrobe_items,
+            outfit_items=outfit_items,
+            used_ids_by_section=used_ids_by_section,
+            requested_style=requested_style,
+            preferences=preferences,
+        )
+        if bag_item and len(outfit_items) < 5:
+            outfit_items.append({**bag_item, "section": "bag"})
+
         outfit_key = tuple(sorted(str(item.get("id")) for item in outfit_items if item.get("id")))
         if outfit_key in exact_outfit_keys:
             any_reused = True
@@ -944,13 +1191,17 @@ async def get_candidate_based_travel_plan(
 
         for item in outfit_items:
             if item.get("id"):
-                packing_by_id[str(item["id"])] = item
+                item_id = str(item["id"])
+                packing_by_id[item_id] = item
                 section = derive_display_section(item)
                 if section in used_ids_by_section:
-                    used_ids_by_section[section].add(str(item["id"]))
+                    if item_id in used_ids_by_section[section]:
+                        any_reused = True
+                    used_ids_by_section[section].add(item_id)
 
         selected_item_ids = [item.get("id") for item in outfit_items if item.get("id")]
         selected_sections = _selected_sections(outfit_items)
+        previous_sections = selected_sections
         print(f"[TravelPlanner] day={day_index + 1} selected_sections={selected_sections}")
         print(f"[TravelPlanner] day={day_index + 1} selected_item_ids={selected_item_ids}")
 
@@ -959,11 +1210,15 @@ async def get_candidate_based_travel_plan(
             "weather": weather,
             "outfit": {
                 "items": [format_clothing_item(item) for item in outfit_items],
-                "reasoning": outfit_data.get("reasoning", ""),
+                "reasoning": _build_travel_day_reasoning(
+                    day_number=day_index + 1,
+                    outfit_items=outfit_items,
+                    weather=weather,
+                    requested_style=requested_style,
+                ),
             },
-            "model_used": result.get("model_used"),
+            "model_used": "candidate_travel_plan",
         })
-        model_used = result.get("model_used", model_used)
 
     packing_items = _format_unique_clothing_items(
         _packing_items_unique(packing_by_id)
@@ -971,8 +1226,8 @@ async def get_candidate_based_travel_plan(
     packing_unique_item_ids = [item.id for item in packing_items]
     print(f"[TravelPlanner] packing_unique_item_ids={packing_unique_item_ids}")
 
-    if any_reused and "Some items were reused because the wardrobe has limited alternatives." not in warnings:
-        warnings.append("Some items were reused because the wardrobe has limited alternatives.")
+    if any_reused:
+        _add_unique_warning(warnings, TRAVEL_REUSE_WARNING_PT)
 
     return {
         "success": True,

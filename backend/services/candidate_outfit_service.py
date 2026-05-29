@@ -84,6 +84,12 @@ TYPE_ALIASES = {
     "sapatos": "shoes",
     "bota": "shoes",
     "botas": "shoes",
+    "sandalia": "shoes",
+    "sandalias": "shoes",
+    "sandália": "shoes",
+    "sandálias": "shoes",
+    "sandal": "shoes",
+    "sandals": "shoes",
     "casaco": "outer_layer",
     "casacos": "outer_layer",
     "jacket": "outer_layer",
@@ -116,8 +122,28 @@ TYPE_ALIASES = {
     "malha": "insulation_layer",
     "sweatshirt": "insulation_layer",
     "cardigan": "insulation_layer",
-    "vestido": "base_layer",
-    "dress": "base_layer",
+    "vestido": "dress",
+    "vestidos": "dress",
+    "dress": "dress",
+    "dresses": "dress",
+    "saia": "skirt",
+    "saias": "skirt",
+    "skirt": "skirt",
+    "skirts": "skirt",
+    "macacao": "jumpsuit",
+    "macacão": "jumpsuit",
+    "macacoes": "jumpsuit",
+    "macacões": "jumpsuit",
+    "jumpsuit": "jumpsuit",
+    "jumpsuits": "jumpsuit",
+    "mala": "bag",
+    "malas": "bag",
+    "carteira": "bag",
+    "carteiras": "bag",
+    "bag": "bag",
+    "bags": "bag",
+    "handbag": "bag",
+    "purse": "bag",
     "acessorio": "accessories",
     "acessorios": "accessories",
     "acessório": "accessories",
@@ -139,14 +165,19 @@ TYPE_ALIASES = {
 
 
 SECTION_ORDER = [
+    "dress",
+    "jumpsuit",
     "base_layer",
     "insulation_layer",
+    "skirt",
     "pants",
     "outer_layer",
     "shoes",
+    "bag",
     "accessories",
 ]
 REQUIRED_SECTIONS = ["base_layer", "pants", "shoes"]
+FEMALE_TEMPLATE_SECTIONS = ["dress", "skirt", "jumpsuit", "bag"]
 
 NEUTRAL_COLORS = {"black", "white", "gray", "grey", "beige", "brown", "navy", "blue"}
 STRONG_COLORS = {"yellow", "red", "green", "pink", "purple", "orange"}
@@ -238,8 +269,8 @@ class CandidateOutfitService:
 
         grouped_all = self._group_by_section(clean_items)
         grouped_temp = self._group_by_section(temp_items)
-        grouped = grouped_temp if self._has_required_sections(grouped_temp) else grouped_all
-        if not self._has_required_sections(grouped_temp):
+        grouped = grouped_temp if self._has_viable_outfit_template(grouped_temp) else grouped_all
+        if not self._has_viable_outfit_template(grouped_temp):
             used_temp_filter = False
 
         print(f"[CandidateOutfit] grouped_items={self._debug_grouped(grouped)}")
@@ -281,13 +312,11 @@ class CandidateOutfitService:
             "[CandidateOutfit] generated_candidates="
             f"{[candidate.to_dict() for candidate in candidates]}"
         )
+        self._log_template_debug(candidates, grouped)
         print(f"[CandidateOutfit] rejected_candidates={rejected_candidates}")
 
         if not candidates:
-            missing = [
-                section for section in REQUIRED_SECTIONS
-                if not grouped.get(section)
-            ]
+            missing = self._missing_sections_for_viable_template(grouped)
             reason = (
                 f"Could not generate complete outfit candidates. Missing clean items for: {', '.join(missing)}."
                 if missing
@@ -468,18 +497,26 @@ class CandidateOutfitService:
 
         base_options = self._forced_or_options("base_layer", sorted_groups, must_by_section)
         pants_options = self._forced_or_options("pants", sorted_groups, must_by_section)
+        dress_options = self._forced_or_options("dress", sorted_groups, must_by_section)
+        skirt_options = self._forced_or_options("skirt", sorted_groups, must_by_section)
+        jumpsuit_options = self._forced_or_options("jumpsuit", sorted_groups, must_by_section)
         shoes_options = self._forced_or_options("shoes", sorted_groups, must_by_section)
         insulation_options = self._forced_or_optional_options("insulation_layer", sorted_groups, must_by_section)
         outer_options = self._forced_or_optional_options("outer_layer", sorted_groups, must_by_section)
+        bag_options = self._forced_or_optional_options("bag", sorted_groups, must_by_section)
         accessories_options = [None] + sorted_groups.get("accessories", [])[:3]
 
         raw_combinations = []
         max_seed = max(
             len(base_options),
             len(pants_options),
+            len(dress_options),
+            len(skirt_options),
+            len(jumpsuit_options),
             len(shoes_options),
             len(insulation_options),
             len(outer_options),
+            len(bag_options),
             len(accessories_options),
             max_candidates,
         )
@@ -487,14 +524,48 @@ class CandidateOutfitService:
         # First pass deliberately rotates the main sections together. This gives
         # visible variety before scoring gets a chance to cluster around one look.
         for index in range(max_seed * 2):
-            raw_combinations.append((
-                self._cyclic_pick(base_options, index),
-                self._cyclic_pick(insulation_options, index),
-                self._cyclic_pick(pants_options, index),
-                self._cyclic_pick(shoes_options, index),
-                self._cyclic_pick(outer_options, index),
-                self._cyclic_pick(accessories_options, index),
-            ))
+            raw_combinations.append(
+                self._raw_template_items(
+                    "standard_outfit",
+                    base=self._cyclic_pick(base_options, index),
+                    insulation=self._cyclic_pick(insulation_options, index),
+                    pants=self._cyclic_pick(pants_options, index),
+                    shoes=self._cyclic_pick(shoes_options, index),
+                    outer=self._cyclic_pick(outer_options, index),
+                    accessory=self._cyclic_pick(accessories_options, index),
+                )
+            )
+            if sorted_groups.get("dress") or "dress" in must_by_section:
+                raw_combinations.append(
+                    self._raw_template_items(
+                        "dress_outfit",
+                        dress=self._cyclic_pick(dress_options, index),
+                        shoes=self._cyclic_pick(shoes_options, index),
+                        outer=self._cyclic_pick(outer_options, index),
+                        bag=self._cyclic_pick(bag_options, index),
+                    )
+                )
+            if sorted_groups.get("skirt") or "skirt" in must_by_section:
+                raw_combinations.append(
+                    self._raw_template_items(
+                        "skirt_outfit",
+                        skirt=self._cyclic_pick(skirt_options, index),
+                        base=self._cyclic_pick(base_options, index),
+                        shoes=self._cyclic_pick(shoes_options, index),
+                        outer=self._cyclic_pick(outer_options, index),
+                        bag=self._cyclic_pick(bag_options, index),
+                    )
+                )
+            if sorted_groups.get("jumpsuit") or "jumpsuit" in must_by_section:
+                raw_combinations.append(
+                    self._raw_template_items(
+                        "jumpsuit_outfit",
+                        jumpsuit=self._cyclic_pick(jumpsuit_options, index),
+                        shoes=self._cyclic_pick(shoes_options, index),
+                        outer=self._cyclic_pick(outer_options, index),
+                        bag=self._cyclic_pick(bag_options, index),
+                    )
+                )
 
         # Second pass explores cross-pairs so small wardrobes can still produce
         # 3-5 candidates without duplicating the first few section choices.
@@ -502,32 +573,29 @@ class CandidateOutfitService:
             for pants_index, pants in enumerate(pants_options):
                 outer_index = base_index + pants_index
                 accessory_index = base_index + (pants_index * 2)
-                raw_combinations.append((
-                    base,
-                    self._cyclic_pick(insulation_options, base_index + pants_index),
-                    pants,
-                    self._cyclic_pick(shoes_options, base_index + pants_index),
-                    self._cyclic_pick(outer_options, outer_index),
-                    self._cyclic_pick(accessories_options, accessory_index),
-                ))
+                raw_combinations.append(
+                    self._raw_template_items(
+                        "standard_outfit",
+                        base=base,
+                        insulation=self._cyclic_pick(insulation_options, base_index + pants_index),
+                        pants=pants,
+                        shoes=self._cyclic_pick(shoes_options, base_index + pants_index),
+                        outer=self._cyclic_pick(outer_options, outer_index),
+                        accessory=self._cyclic_pick(accessories_options, accessory_index),
+                    )
+                )
 
         candidate_pool: List[CandidateOutfit] = []
         seen_signatures = set()
 
-        for base, insulation, pants, shoes, outer, accessory in raw_combinations:
-            raw_items = {
-                "base_layer": base,
-                "insulation_layer": insulation,
-                "pants": pants,
-                "outer_layer": outer,
-                "shoes": shoes,
-                "accessories": accessory,
-            }
+        for raw_items in raw_combinations:
             is_valid, reason = self.validate_candidate(raw_items, must_by_section)
             if not is_valid:
                 rejected_candidates.append({
                     "item_ids": [
-                        item.get("id") for item in raw_items.values() if item
+                        item.get("id")
+                        for section, item in raw_items.items()
+                        if section != "_template_used" and item
                     ],
                     "reason": reason,
                 })
@@ -562,6 +630,7 @@ class CandidateOutfitService:
                 must_by_section,
                 weather,
             )
+            metadata["template_used"] = raw_items.get("_template_used", "standard_outfit")
             metadata["diversity_reason"] = self._diversity_reason(
                 candidate_items,
                 candidate_pool,
@@ -590,12 +659,26 @@ class CandidateOutfitService:
         raw_items: Dict[str, Optional[Dict[str, Any]]],
         must_by_section: Dict[str, Dict[str, Any]],
     ) -> Tuple[bool, str]:
-        for section in REQUIRED_SECTIONS:
+        template_used = str(raw_items.get("_template_used") or "standard_outfit")
+        required_sections = self._required_sections_for_template(template_used)
+
+        for section in required_sections:
             if not raw_items.get(section):
                 return False, f"missing_required_section:{section}"
 
+        if raw_items.get("dress") and raw_items.get("pants"):
+            return False, "invalid_combo:dress_with_pants"
+        if raw_items.get("jumpsuit") and raw_items.get("pants"):
+            return False, "invalid_combo:jumpsuit_with_pants"
+        if raw_items.get("jumpsuit") and raw_items.get("base_layer"):
+            return False, "invalid_combo:jumpsuit_with_required_base_layer"
+        if raw_items.get("skirt") and not raw_items.get("base_layer"):
+            return False, "invalid_combo:skirt_without_base_layer"
+
         ids = [
-            str(item.get("id")) for item in raw_items.values() if item
+            str(item.get("id"))
+            for section, item in raw_items.items()
+            if section != "_template_used" and item
         ]
         if len(ids) != len(set(ids)):
             return False, "duplicate_item"
@@ -608,6 +691,8 @@ class CandidateOutfitService:
                 return False, f"must_include_mismatch:{section}"
 
         for section, item in raw_items.items():
+            if section == "_template_used":
+                continue
             if not item:
                 continue
             actual_section = self.get_section(item)
@@ -615,6 +700,109 @@ class CandidateOutfitService:
                 return False, f"section_mismatch:{section}:{actual_section}"
 
         return True, ""
+
+    def _raw_template_items(
+        self,
+        template_used: str,
+        base: Optional[Dict[str, Any]] = None,
+        insulation: Optional[Dict[str, Any]] = None,
+        pants: Optional[Dict[str, Any]] = None,
+        dress: Optional[Dict[str, Any]] = None,
+        skirt: Optional[Dict[str, Any]] = None,
+        jumpsuit: Optional[Dict[str, Any]] = None,
+        outer: Optional[Dict[str, Any]] = None,
+        shoes: Optional[Dict[str, Any]] = None,
+        bag: Optional[Dict[str, Any]] = None,
+        accessory: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        return {
+            "_template_used": template_used,
+            "dress": dress,
+            "jumpsuit": jumpsuit,
+            "base_layer": base,
+            "insulation_layer": insulation,
+            "skirt": skirt,
+            "pants": pants,
+            "outer_layer": outer,
+            "shoes": shoes,
+            "bag": bag,
+            "accessories": accessory,
+        }
+
+    def _template_for_items(self, items: List[Dict[str, Any]]) -> str:
+        sections = {item.get("section") for item in items}
+        if "dress" in sections:
+            return "dress_outfit"
+        if "skirt" in sections:
+            return "skirt_outfit"
+        if "jumpsuit" in sections:
+            return "jumpsuit_outfit"
+        return "standard_outfit"
+
+    def _required_sections_for_template(self, template_used: str) -> List[str]:
+        if template_used == "dress_outfit":
+            return ["dress", "shoes"]
+        if template_used == "skirt_outfit":
+            return ["skirt", "base_layer", "shoes"]
+        if template_used == "jumpsuit_outfit":
+            return ["jumpsuit", "shoes"]
+        return list(REQUIRED_SECTIONS)
+
+    def _has_viable_outfit_template(self, grouped: Dict[str, List[Dict[str, Any]]]) -> bool:
+        if all(grouped.get(section) for section in REQUIRED_SECTIONS):
+            return True
+        if grouped.get("dress") and grouped.get("shoes"):
+            return True
+        if grouped.get("jumpsuit") and grouped.get("shoes"):
+            return True
+        if grouped.get("skirt") and grouped.get("base_layer") and grouped.get("shoes"):
+            return True
+        return False
+
+    def _missing_sections_for_viable_template(
+        self,
+        grouped: Dict[str, List[Dict[str, Any]]],
+    ) -> List[str]:
+        templates = [
+            REQUIRED_SECTIONS,
+            ["dress", "shoes"],
+            ["jumpsuit", "shoes"],
+            ["skirt", "base_layer", "shoes"],
+        ]
+        missing_by_template = [
+            [section for section in template if not grouped.get(section)]
+            for template in templates
+        ]
+        return min(missing_by_template, key=len)
+
+    def _female_sections_available(
+        self,
+        grouped: Dict[str, List[Dict[str, Any]]],
+    ) -> List[str]:
+        return [
+            section for section in FEMALE_TEMPLATE_SECTIONS
+            if grouped.get(section)
+        ]
+
+    def _log_template_debug(
+        self,
+        candidates: List[CandidateOutfit],
+        grouped: Dict[str, List[Dict[str, Any]]],
+    ) -> None:
+        female_sections = self._female_sections_available(grouped)
+        if not female_sections:
+            return
+        for candidate in candidates:
+            debug_payload = {
+                "template_used": candidate.metadata.get(
+                    "template_used", "standard_outfit"
+                ),
+                "female_sections_available": female_sections,
+                "final_item_sections": [
+                    item.get("section") for item in candidate.items
+                ],
+            }
+            print(f"[CandidateOutfit] template_debug={debug_payload}")
 
     def _select_diverse_candidates(
         self,
@@ -664,7 +852,7 @@ class CandidateOutfitService:
             self._candidate_by_section(existing.items) for existing in selected
         ]
         bonus = 0.0
-        for section in ["base_layer", "insulation_layer", "pants", "outer_layer", "accessories", "shoes"]:
+        for section in ["dress", "jumpsuit", "base_layer", "insulation_layer", "skirt", "pants", "outer_layer", "bag", "accessories", "shoes"]:
             candidate_id = candidate_by_section.get(section)
             if not candidate_id:
                 continue
@@ -673,7 +861,11 @@ class CandidateOutfitService:
                 if existing.get(section)
             }
             if candidate_id not in seen_ids:
-                if section == "base_layer":
+                if section in {"dress", "jumpsuit"}:
+                    bonus += 16
+                elif section == "base_layer":
+                    bonus += 14
+                elif section == "skirt":
                     bonus += 14
                 elif section == "insulation_layer":
                     bonus += 6
@@ -681,7 +873,7 @@ class CandidateOutfitService:
                     bonus += 14
                 elif section == "outer_layer":
                     bonus += 8
-                elif section == "accessories":
+                elif section in {"bag", "accessories"}:
                     bonus += 4
                 elif section == "shoes":
                     bonus += 2
@@ -706,14 +898,22 @@ class CandidateOutfitService:
         current = self._candidate_by_section(items)
         previous = self._candidate_by_section(previous_candidates[-1].items)
         reasons = []
+        if current.get("dress") != previous.get("dress"):
+            reasons.append("different dress")
+        if current.get("jumpsuit") != previous.get("jumpsuit"):
+            reasons.append("different jumpsuit")
         if current.get("base_layer") != previous.get("base_layer"):
             reasons.append("different base layer")
         if current.get("insulation_layer") and current.get("insulation_layer") != previous.get("insulation_layer"):
             reasons.append("added insulation layer" if not previous.get("insulation_layer") else "different insulation layer")
         if current.get("pants") != previous.get("pants"):
             reasons.append("different pants")
+        if current.get("skirt") != previous.get("skirt"):
+            reasons.append("different skirt")
         if current.get("outer_layer") and current.get("outer_layer") != previous.get("outer_layer"):
             reasons.append("added outer layer" if not previous.get("outer_layer") else "different outer layer")
+        if current.get("bag") and current.get("bag") != previous.get("bag"):
+            reasons.append("different bag")
         if current.get("accessories") and current.get("accessories") != previous.get("accessories"):
             reasons.append("different accessories")
         if not reasons:
@@ -780,6 +980,7 @@ class CandidateOutfitService:
             "completeness": self._completeness_score(items, weather),
             "usage_rotation": self._usage_rotation_score(items),
             "section_correctness": self._section_correctness_score(items),
+            "template_fit": self._template_fit_score(items, parsed_intent),
         }
         total = round(sum(score_breakdown.values()), 3)
         score_breakdown["total"] = total
@@ -859,6 +1060,13 @@ class CandidateOutfitService:
                 score -= 5.0
         if "smart casual" in styles and ({"formal", "casual"} & styles):
             score += 2.0
+        sections = {item.get("section") for item in items}
+        if "dress" in sections and "pants" in sections:
+            score -= 12.0
+        if "jumpsuit" in sections and ("pants" in sections or "base_layer" in sections):
+            score -= 12.0
+        if "skirt" in sections and "base_layer" not in sections:
+            score -= 12.0
         return self._clamp(score, 0.0, 15.0)
 
     def _formality_score(
@@ -901,7 +1109,10 @@ class CandidateOutfitService:
             item.get("section"): self.normalize_color(item.get("source", {}).get("color"))
             for item in items
         }
-        if section_by_color.get("shoes") in unique_strong and section_by_color.get("accessories") == section_by_color.get("shoes"):
+        if section_by_color.get("shoes") in unique_strong and (
+            section_by_color.get("accessories") == section_by_color.get("shoes")
+            or section_by_color.get("bag") == section_by_color.get("shoes")
+        ):
             score += 1.0
         return self._clamp(score, 0.0, 12.0)
 
@@ -963,8 +1174,13 @@ class CandidateOutfitService:
             section = item.get("section")
             section_counts[section] = section_counts.get(section, 0) + 1
         score = 0.0
-        for section in REQUIRED_SECTIONS:
+        template = self._template_for_items(items)
+        for section in self._required_sections_for_template(template):
             score += 4.0 if section_counts.get(section) else -8.0
+        if template != "standard_outfit":
+            score += 4.0
+        if section_counts.get("bag"):
+            score += 1.0
         if section_counts.get("accessories"):
             score += 1.0
         temp = weather.get("temp", weather.get("temperature"))
@@ -985,6 +1201,44 @@ class CandidateOutfitService:
             if section != "accessories"
         )
         score -= duplicate_sections * 3.0
+        return self._clamp(score, 0.0, 14.0)
+
+    def _template_fit_score(
+        self,
+        items: List[Dict[str, Any]],
+        parsed_intent: Dict[str, Any],
+    ) -> float:
+        sections = {item.get("section") for item in items}
+        score = 8.0
+        requested_style = self._requested_style(parsed_intent)
+        requested_occasion = self._requested_occasion(parsed_intent)
+
+        if "dress" in sections and "pants" in sections:
+            score -= 12.0
+        if "jumpsuit" in sections and "pants" in sections:
+            score -= 12.0
+        if "skirt" in sections and "base_layer" not in sections:
+            score -= 12.0
+        if "bag" in sections and "shoes" not in sections:
+            score -= 8.0
+
+        if requested_style in {"formal", "elegant", "classic"}:
+            if sections & {"dress", "bag"}:
+                score += 3.0
+            if "outer_layer" in sections:
+                score += 2.0
+        elif requested_style == "casual":
+            if sections & {"skirt", "jumpsuit", "dress"}:
+                score += 2.0
+
+        if requested_occasion in {"dinner", "night"}:
+            if sections & {"dress", "skirt"}:
+                score += 3.0
+            if "bag" in sections:
+                score += 2.0
+            if "outer_layer" in sections:
+                score += 1.0
+
         return self._clamp(score, 0.0, 14.0)
 
     def _usage_rotation_score(self, items: List[Dict[str, Any]]) -> float:
@@ -1052,9 +1306,9 @@ class CandidateOutfitService:
 
     def _item_style_label(self, item: Dict[str, Any]) -> str:
         text = self._item_text(item)
-        if any(token in text for token in ["formal", "work", "office", "camisa", "shirt", "blazer", "elegant", "elegante"]):
+        if any(token in text for token in ["formal", "work", "office", "camisa", "shirt", "blazer", "elegant", "elegante", "vestido formal", "dress formal", "mala formal"]):
             return "formal"
-        if any(token in text for token in ["classic", "classico", "classica", "classicas", "trousers", "calcas classicas"]):
+        if any(token in text for token in ["classic", "classico", "classica", "classicas", "trousers", "calcas classicas", "saia classica"]):
             return "classic"
         if "smart casual" in text or "smart_casual" in text:
             return "smart casual"
@@ -1062,7 +1316,7 @@ class CandidateOutfitService:
             return "sporty"
         if any(token in text for token in ["streetwear", "oversized", "stussy", "jordan"]):
             return "streetwear"
-        if any(token in text for token in ["casual", "daily", "dia a dia", "hoodie", "tee", "t-shirt"]):
+        if any(token in text for token in ["casual", "daily", "dia a dia", "hoodie", "tee", "t-shirt", "top", "saia", "skirt", "jumpsuit", "macacao", "vestido"]):
             return "casual"
         return "casual"
 
@@ -1125,7 +1379,7 @@ class CandidateOutfitService:
         )
         if item.get("favorite"):
             score += 2
-        if self.get_section(item) in REQUIRED_SECTIONS:
+        if self.get_section(item) in REQUIRED_SECTIONS + FEMALE_TEMPLATE_SECTIONS:
             score += 2
         if requested_style and self._item_style_matches(item, requested_style):
             score += 15
@@ -1133,7 +1387,7 @@ class CandidateOutfitService:
             text = self._normalize_text(
                 f"{item.get('name', '')} {item.get('type', '')} {item.get('style', '')} {item.get('occasion', '')}"
             )
-            if any(token in text for token in ["formal", "work", "camisa", "shirt", "blazer", "classico", "classica", "classicas", "calca", "calcas", "sapato"]):
+            if any(token in text for token in ["formal", "work", "camisa", "shirt", "blazer", "classico", "classica", "classicas", "calca", "calcas", "sapato", "vestido", "dress", "mala", "bag"]):
                 score += 8
             if any(token in text for token in ["jersey", "sport", "desportivo", "jordan", "running"]):
                 score -= 8
@@ -1145,7 +1399,7 @@ class CandidateOutfitService:
             f"{item.get('style', '')} {item.get('occasion', '')} {item.get('name', '')} {item.get('type', '')}"
         )
         if requested == "formal":
-            return any(token in text for token in ["formal", "work", "elegant", "classico", "classica", "camisa", "blazer"])
+            return any(token in text for token in ["formal", "work", "elegant", "classico", "classica", "camisa", "blazer", "vestido", "dress", "mala", "bag"])
         return requested in text
 
     def _section_style_score(
@@ -1162,8 +1416,8 @@ class CandidateOutfitService:
             return 3.0 if requested and requested in text else 0.0
 
         score = 0.0
-        if section == "base_layer":
-            if any(token in text for token in ["camisa", "shirt", "formal", "work"]):
+        if section in {"base_layer", "dress", "skirt", "jumpsuit"}:
+            if any(token in text for token in ["camisa", "shirt", "blusa", "blouse", "formal", "work", "vestido", "dress", "saia", "skirt", "macacao", "jumpsuit"]):
                 score += 10
             if any(token in text for token in ["jersey", "sport", "hoodie"]):
                 score -= 8
@@ -1182,6 +1436,9 @@ class CandidateOutfitService:
                 score += 8
             if any(token in text for token in ["jordan", "running", "sport"]):
                 score -= 8
+        elif section == "bag":
+            if any(token in text for token in ["mala", "bag", "carteira", "formal", "work", "elegant"]):
+                score += 8
         return score
 
     def _usage_frequency(self, item: Dict[str, Any]) -> float:

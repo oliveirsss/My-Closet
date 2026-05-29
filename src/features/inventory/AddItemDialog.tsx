@@ -43,7 +43,24 @@ export function AddItemDialog({ open, onOpenChange, onAdd, onUpdate, itemToEdit 
   const [windproof, setWindproof] = useState(false);
   const [seasons, setSeasons] = useState<string[]>([]);
 
-  const clothingTypes = ['Casaco', 'Camisola', 'T-shirt', 'Camisa', 'Calças', 'Calções', 'Vestido', 'Calçado'];
+  const clothingTypes = [
+    'T-shirt',
+    'Camisa',
+    'Camisola',
+    'Hoodie',
+    'Knit',
+    'Calças',
+    'Calções',
+    'Casaco',
+    'Blazer',
+    'Sobretudo',
+    'Calçado',
+    'Accessory',
+    'Vestido',
+    'Saia',
+    'Mala',
+    'Top',
+  ];
   const styleOptions = ['casual', 'formal', 'sporty', 'streetwear', 'smart casual', 'elegant'];
   const occasionOptions = ['daily', 'work', 'party', 'gym', 'travel', 'date', 'beach'];
   const allSeasons = ['Inverno', 'Outono', 'Primavera', 'Verão'];
