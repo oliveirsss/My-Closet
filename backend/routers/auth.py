@@ -63,6 +63,7 @@ def get_profile(authorization: str = Header(None)):
         meta = user.user.user_metadata or {}
         return {
             "profile": {
+                "user_id": user.user.id,
                 "name": meta.get("name", "Utilizador"),
                 "avatar_url": meta.get("avatar_url", ""),
                 "bio": meta.get("bio", ""),

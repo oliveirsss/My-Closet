@@ -46,6 +46,7 @@ import type { WearHistoryEntry } from "../../services/api";
 // --- CONFIGURAÇÃO DA API ---
 const API_KEY = import.meta.env.VITE_OPENWEATHER_API_KEY || "";
 const API_URL = "https://api.openweathermap.org/data/2.5/weather";
+const WEATHER_REQUEST_TIMEOUT_MS = 10000;
 
 interface DashboardProps {
   items: ClothingItem[];
@@ -96,6 +97,7 @@ export function Dashboard({
     city: "A localizar...",
     loading: true,
   });
+  const [profileLoaded, setProfileLoaded] = useState(false);
 
   const [isAIChatOpen, setIsAIChatOpen] = useState(false);
 
@@ -116,13 +118,15 @@ export function Dashboard({
         // Tenta carregar do backend (onde os updates são gravados)
         const { profile } = await api.getProfile();
 
+        console.log("[Weather Debug] Profile API response received", profile);
+
         if (profile) {
           setUserProfile({
             name: profile.name || "Utilizador",
             avatar_url: profile.avatar_url || "",
             bio: profile.bio || "",
             location: profile.location || "",
-            id: profile.user_id,
+            id: profile.user_id || "",
           });
         }
       } catch (error) {
@@ -139,6 +143,8 @@ export function Dashboard({
             id: user.id || "",
           });
         }
+      } finally {
+        setProfileLoaded(true);
       }
     };
     loadProfile();
@@ -173,48 +179,73 @@ export function Dashboard({
   // 4. Carregar Tempo (Prioridade: 1. GPS, 2. Localização do Perfil, 3. Lisboa - Fallback)
   useEffect(() => {
     let active = true;
+    let geolocationFallbackTimer: number | undefined;
+    let weatherRequestIssued = false;
+
+    const fetchWeatherFromFallbackLocation = async () => {
+      if (userProfile.location && userProfile.location.trim() !== "") {
+        await fetchWeatherByCity(userProfile.location);
+      } else {
+        await fetchWeatherByCoords(38.7169, -9.1399); // Fallback Lisboa
+      }
+    };
+
+    const requestWeatherOnce = async (request: () => Promise<void>) => {
+      if (!active || weatherRequestIssued) return;
+      weatherRequestIssued = true;
+      if (geolocationFallbackTimer) window.clearTimeout(geolocationFallbackTimer);
+      await request();
+    };
 
     const loadWeather = () => {
+      console.log("[Weather Debug] Weather request started", {
+        source: "dashboard",
+        profileLoaded,
+        profileLocation: userProfile.location,
+        hasApiKey: Boolean(API_KEY),
+        loading: weather.loading,
+      });
       if (navigator.geolocation) {
+        geolocationFallbackTimer = window.setTimeout(() => {
+          console.warn("[Weather Debug] Geolocation timed out, using fallback location");
+          requestWeatherOnce(fetchWeatherFromFallbackLocation);
+        }, 10000);
         navigator.geolocation.getCurrentPosition(
           async (position) => {
-            if (!active) return;
             const { latitude, longitude } = position.coords;
-            fetchWeatherByCoords(latitude, longitude);
+            await requestWeatherOnce(() => fetchWeatherByCoords(latitude, longitude));
           },
           async (error) => {
-            if (!active) return;
             console.warn("Geolocalização não disponível, a usar localização do perfil:", error);
-            if (userProfile.location && userProfile.location.trim() !== "") {
-              fetchWeatherByCity(userProfile.location);
-            } else {
-              fetchWeatherByCoords(38.7169, -9.1399); // Fallback Lisboa
-            }
+            await requestWeatherOnce(fetchWeatherFromFallbackLocation);
           },
           { timeout: 10000 }
         );
       } else {
-        if (userProfile.location && userProfile.location.trim() !== "") {
-          fetchWeatherByCity(userProfile.location);
-        } else {
-          fetchWeatherByCoords(38.7169, -9.1399);
-        }
+        requestWeatherOnce(fetchWeatherFromFallbackLocation);
       }
     };
 
-    // Apenas carrega a meteorologia quando o perfil estiver carregado (evita chamadas redundantes)
-    if (userProfile.id) {
+    // Apenas carrega a meteorologia quando a tentativa de perfil terminar (evita chamadas redundantes)
+    if (profileLoaded) {
       loadWeather();
     }
 
     return () => {
       active = false;
+      if (geolocationFallbackTimer) window.clearTimeout(geolocationFallbackTimer);
     };
-  }, [userProfile.location, userProfile.id]);
+  }, [profileLoaded, userProfile.location]);
 
   const processWeatherResponse = async (res: Response, fallbackCity?: string) => {
-    if (!res.ok) throw new Error("Weather API failed");
+    console.log("[Weather Debug] API response received", {
+      ok: res.ok,
+      status: res.status,
+      statusText: res.statusText,
+    });
+    if (!res.ok) throw new Error(`Weather API failed: ${res.status} ${res.statusText}`);
     const data = await res.json();
+    console.log("[Weather Debug] Response parsing", data);
 
     const code = data.weather[0].id;
     let condition = "cloudy";
@@ -226,7 +257,7 @@ export function Dashboard({
       isRaining = true;
     }
 
-    setWeather({
+    const nextWeather = {
       temp: Math.round(data.main.temp),
       humidity: data.main.humidity,
       condition,
@@ -234,34 +265,59 @@ export function Dashboard({
       windSpeed: data.wind?.speed || 0, // Wind speed in m/s
       city: data.name || fallbackCity || "Desconhecido",
       loading: false,
-    });
+    };
+    console.log("[Weather Debug] State update", nextWeather);
+    console.log("[Weather Debug] Loading state changes", { from: weather.loading, to: false });
+    setWeather(nextWeather);
+  };
+
+  const fetchWeatherWithTimeout = async (url: string) => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), WEATHER_REQUEST_TIMEOUT_MS);
+    console.log("[Weather Debug] Request URL", url.replace(API_KEY, "[API_KEY]"));
+    try {
+      return await fetch(url, { signal: controller.signal });
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   };
 
   const fetchWeatherByCoords = async (lat: number, lon: number) => {
     if (!API_KEY) {
+      const fallbackWeather = { ...weather, temp: 18, windSpeed: 0, city: "Modo Demo", loading: false };
+      console.log("[Weather Debug] State update", fallbackWeather);
+      console.log("[Weather Debug] Loading state changes", { from: weather.loading, to: false });
       setWeather((prev) => ({ ...prev, temp: 18, windSpeed: 0, city: "Modo Demo", loading: false }));
       return;
     }
     try {
-      const res = await fetch(`${API_URL}?lat=${lat}&lon=${lon}&units=metric&appid=${API_KEY}&lang=pt`);
+      const url = `${API_URL}?lat=${lat}&lon=${lon}&units=metric&appid=${API_KEY}&lang=pt`;
+      const res = await fetchWeatherWithTimeout(url);
       await processWeatherResponse(res);
     } catch (error) {
+      console.error("[Weather Debug] Weather request failed", error);
+      console.log("[Weather Debug] State update", { city: "Erro API", loading: false });
+      console.log("[Weather Debug] Loading state changes", { from: weather.loading, to: false });
       setWeather((prev) => ({ ...prev, loading: false, city: "Erro API" }));
     }
   };
 
   const fetchWeatherByCity = async (city: string) => {
     if (!API_KEY) {
+      const fallbackWeather = { ...weather, temp: 18, windSpeed: 0, city: city, loading: false };
+      console.log("[Weather Debug] State update", fallbackWeather);
+      console.log("[Weather Debug] Loading state changes", { from: weather.loading, to: false });
       setWeather((prev) => ({ ...prev, temp: 18, windSpeed: 0, city: city, loading: false }));
       return;
     }
     try {
-      const res = await fetch(`${API_URL}?q=${encodeURIComponent(city)}&units=metric&appid=${API_KEY}&lang=pt`);
+      const url = `${API_URL}?q=${encodeURIComponent(city)}&units=metric&appid=${API_KEY}&lang=pt`;
+      const res = await fetchWeatherWithTimeout(url);
       await processWeatherResponse(res, city);
     } catch (error) {
       console.error("Erro ao procurar tempo por cidade, fallback para GPS:", error);
       // Fallback para as coordenadas
-      fetchWeatherByCoords(38.7169, -9.1399);
+      await fetchWeatherByCoords(38.7169, -9.1399);
     }
   };
 
